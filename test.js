@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer-cluster');
+const puppeteer = require('puppeteer');
 const inquirer = require('inquirer');
 
 // Function to start browser automation
@@ -13,28 +13,23 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
   // Add the selected filter to the query string
   const filterParam = filterMap[filter] || ''; // Default to no filter if invalid filter
 
-  // Create a puppeteer cluster with a maximum of 10 parallel browser windows
-  const cluster = await puppeteer.Cluster.launch({
-    concurrency: puppeteer.Cluster.CONCURRENCY_CONTEXT,
-    maxConcurrency: 10,  // Adjust the concurrency based on system resources
-    timeout: 60000, // Set timeout to 60 seconds for tasks
-  });
+  const browserPromises = [];
 
-  // Queue the tasks to open windows
   for (let i = 0; i < windows; i++) {
-    cluster.queue({ i, query, filterParam, useProxies, proxies, channelName });
+    browserPromises.push(
+      openWindow(i, query, filterParam, useProxies, proxies, channelName)
+    );
   }
 
-  // Run the cluster and wait for all tasks to finish
-  await cluster.idle();
-  await cluster.close();
+  // Wait for all windows to open concurrently
+  await Promise.all(browserPromises);
 }
 
-// Worker function to handle each task
-async function handleTask({ page, data: { i, query, filterParam, useProxies, proxies, channelName } }) {
+// Function to open a single window
+async function openWindow(i, query, filterParam, useProxies, proxies, channelName) {
   const browser = await puppeteer.launch({
     headless: false,
-    executablePath: '/usr/bin/chromium-browser',
+    executablePath: '/usr/bin/chromium-browser', // Path to Chromium
     args: [
       '--window-size=800,600',
       '--disable-infobars',
@@ -48,16 +43,16 @@ async function handleTask({ page, data: { i, query, filterParam, useProxies, pro
   const windowX = 100 + i * (windowWidth + 20);
   const windowY = 100;
 
-  // Open a new page and set viewport size
-  const page = await browser.newPage();
+  const page = await browser.newPage(); // Declare `page` once here
   await page.setViewport({ width: windowWidth, height: windowHeight });
 
-  // Move the window to the correct position on the screen
+  // Move and resize the window
   await page.evaluateOnNewDocument((x, y) => {
     window.moveTo(x, y);
     window.resizeTo(window.innerWidth, window.innerHeight);
   }, windowX, windowY);
 
+  // Proxy settings (if enabled)
   if (useProxies && proxies[i]) {
     const proxy = proxies[i];
     await page.authenticate({

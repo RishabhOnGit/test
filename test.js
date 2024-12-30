@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-cluster');
 const inquirer = require('inquirer');
 
 // Function to start browser automation
@@ -13,23 +13,28 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
   // Add the selected filter to the query string
   const filterParam = filterMap[filter] || ''; // Default to no filter if invalid filter
 
-  const browserPromises = [];
+  // Create a puppeteer cluster with a maximum of 10 parallel browser windows
+  const cluster = await puppeteer.Cluster.launch({
+    concurrency: puppeteer.Cluster.CONCURRENCY_CONTEXT,
+    maxConcurrency: 10,  // Adjust the concurrency based on system resources
+    timeout: 60000, // Set timeout to 60 seconds for tasks
+  });
 
+  // Queue the tasks to open windows
   for (let i = 0; i < windows; i++) {
-    browserPromises.push(
-      openWindow(i, query, filterParam, useProxies, proxies, channelName)
-    );
+    cluster.queue({ i, query, filterParam, useProxies, proxies, channelName });
   }
 
-  // Wait for all windows to open concurrently
-  await Promise.all(browserPromises);
+  // Run the cluster and wait for all tasks to finish
+  await cluster.idle();
+  await cluster.close();
 }
 
-// Function to open a single window
-async function openWindow(i, query, filterParam, useProxies, proxies, channelName) {
+// Worker function to handle each task
+async function handleTask({ page, data: { i, query, filterParam, useProxies, proxies, channelName } }) {
   const browser = await puppeteer.launch({
     headless: false,
-    executablePath: '/usr/bin/chromium-browser', // Path to Chromium
+    executablePath: '/usr/bin/chromium-browser',
     args: [
       '--window-size=800,600',
       '--disable-infobars',
@@ -43,9 +48,11 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
   const windowX = 100 + i * (windowWidth + 20);
   const windowY = 100;
 
+  // Open a new page and set viewport size
   const page = await browser.newPage();
   await page.setViewport({ width: windowWidth, height: windowHeight });
 
+  // Move the window to the correct position on the screen
   await page.evaluateOnNewDocument((x, y) => {
     window.moveTo(x, y);
     window.resizeTo(window.innerWidth, window.innerHeight);
@@ -121,13 +128,6 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     await page.goto(matchedVideo.link); // Go to the video link
     await page.waitForSelector('video'); // Wait for the video to start
     console.log(`Window ${i + 1} is playing: ${matchedVideo.title} by ${matchedVideo.channel}`);
-
-    // Track the played time every second
-    setInterval(async () => {
-      const currentTime = await page.$eval('video', (video) => video.currentTime);
-      const duration = await page.$eval('video', (video) => video.duration);
-      process.stdout.write(`Window ${i + 1} - Played time: ${currentTime.toFixed(2)} / ${duration.toFixed(2)} seconds\r`);
-    }, 1000); // Update every second
   }
 }
 

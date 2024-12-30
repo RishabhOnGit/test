@@ -29,10 +29,12 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
 async function openWindow(i, query, filterParam, useProxies, proxies, channelName) {
   const browser = await puppeteer.launch({
     headless: false,
-    executablePath: '/usr/bin/chromium-browser', // Add your custom Chromium path here
+    executablePath: '/usr/bin/chromium-browser', // Path to Chromium
     args: [
       '--window-size=800,600',
       '--disable-infobars',
+      '--no-sandbox',  // Add this flag to avoid issues when running as root
+      '--disable-dev-shm-usage', // Optional: Fixes issues on some systems
     ]
   });
 

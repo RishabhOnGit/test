@@ -7,7 +7,6 @@ function readProxiesFromFile(filePath) {
   try {
     const proxyData = fs.readFileSync(filePath, 'utf8');
     const proxies = proxyData.split('\n').map((line, index) => {
-      // Skip empty lines or invalid formats
       if (!line.trim()) return null;
 
       const [credentials, ipPort] = line.split('@');
@@ -19,14 +18,13 @@ function readProxiesFromFile(filePath) {
       const [username, password] = credentials.split(':');
       const [ip, port] = ipPort.split(':');
 
-      // Validate the parsed proxy structure
       if (!username || !password || !ip || !port) {
         console.error(`Invalid proxy format at line ${index + 1}: ${line}`);
         return null;
       }
 
       return { username, password, ip, port };
-    }).filter(proxy => proxy !== null);  // Filter out invalid proxies
+    }).filter(proxy => proxy !== null);
 
     console.log(`Loaded ${proxies.length} valid proxies from the file.`);
     return proxies;
@@ -39,33 +37,31 @@ function readProxiesFromFile(filePath) {
 // Function to start browser automation
 async function startAutomation(query, windows, useProxies, proxies, filter, channelName, headless) {
   const filterMap = {
-    'Last hour': '&sp=EgIIAQ%253D%253D',   // Last hour filter
-    'Today': '&sp=EgIIAg%253D%253D',       // Today filter
-    'This week': '&sp=EgIIAw%253D%253D'    // This week filter
+    'Last hour': '&sp=EgIIAQ%253D%253D',
+    'Today': '&sp=EgIIAg%253D%253D',
+    'This week': '&sp=EgIIAw%253D%253D'
   };
 
   const filterParam = filterMap[filter] || '';
   const browserPromises = [];
-
-  // Limit proxies to the number of windows (or loop through if there are fewer proxies)
   const usableProxies = useProxies ? proxies.slice(0, windows) : proxies;
 
-  // Ensure proxies are assigned to each window
   for (let i = 0; i < windows; i++) {
-    const proxy = useProxies ? usableProxies[i % usableProxies.length] : null; // Loop through proxies if there are fewer than windows
+    const proxy = useProxies ? usableProxies[i % usableProxies.length] : null;
     browserPromises.push(
       openWindow(i, query, filterParam, useProxies, proxy, channelName, headless)
     );
   }
 
-  await Promise.allSettled(browserPromises); // Use Promise.allSettled to handle errors gracefully
+  await Promise.allSettled(browserPromises);
 }
 
 // Function to open a single browser window
 async function openWindow(i, query, filterParam, useProxies, proxy, channelName, headless) {
   try {
     const browser = await puppeteer.launch({
-      headless: headless, // Headless mode based on user input
+      executablePath: '/usr/bin/chromium-browser', // Custom Chromium path for Ubuntu
+      headless: headless,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -73,13 +69,12 @@ async function openWindow(i, query, filterParam, useProxies, proxy, channelName,
         '--disable-gpu',
         '--disable-infobars',
         '--window-size=800,600',
-        ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []), // Apply proxy server if provided
+        ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
     });
 
     const page = await browser.newPage();
 
-    // Apply proxy authentication if needed
     if (useProxies && proxy) {
       await page.authenticate({
         username: proxy.username,
@@ -137,7 +132,6 @@ async function openWindow(i, query, filterParam, useProxies, proxy, channelName,
 
 // Function to show the playing time of the video
 async function showPlayingTime(page, windowNumber, interval = 2000) {
-  // Ensure the video resumes playback if paused
   await ensureVideoIsPlaying(page);
 
   console.log(`Playing time updates for Window ${windowNumber}:`);
@@ -193,7 +187,7 @@ async function ensureVideoIsPlaying(page) {
           console.log('Video is paused. Resuming playback...');
           video.play();
         }
-      }, 1000); // Check every second
+      }, 1000);
     }
   });
 }
@@ -228,7 +222,7 @@ async function ensureVideoIsPlaying(page) {
     {
       type: 'input',
       name: 'proxyFilePath',
-      message: 'Enter the path of the proxy file (e.g., ./proxies.txt):',  // Use relative path
+      message: 'Enter the path of the proxy file (e.g., ./proxies.txt):',
       when: (answers) => answers.useProxies,
     },
     {
@@ -242,16 +236,15 @@ async function ensureVideoIsPlaying(page) {
       type: 'confirm',
       name: 'headless',
       message: 'Do you want to use headless mode? (No UI)',
-      default: true, // Default value set to true (yes)
+      default: true,
     },
   ]);
 
   let proxies = [];
   if (answers.useProxies && answers.proxyFilePath) {
-    proxies = readProxiesFromFile(answers.proxyFilePath);  // Use the dynamic file path
+    proxies = readProxiesFromFile(answers.proxyFilePath);
   }
 
-  // Now pass proxies to the startAutomation function as needed
   await startAutomation(
     answers.query,
     answers.windows,

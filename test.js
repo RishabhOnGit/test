@@ -1,31 +1,16 @@
 const puppeteer = require('puppeteer');
 const inquirer = require('inquirer');
-const fs = require('fs').promises; // For reading the proxies file
-
-// Function to read proxies from a local file
-async function readProxiesFromFile(filePath) {
-  try {
-    const data = await fs.readFile(filePath, 'utf-8');
-    const proxyLines = data.split('\n').filter((line) => line.trim() !== ''); // Remove empty lines
-    return proxyLines.map((proxy) => {
-      const [username, password] = proxy.split(':');
-      return { username, password };
-    });
-  } catch (error) {
-    console.error(`Failed to read proxies from file (${filePath}):`, error.message);
-    return [];
-  }
-}
+const fs = require('fs');
 
 // Function to start browser automation
 async function startAutomation(query, windows, useProxies, proxies, filter, channelName, headless) {
   const filterMap = {
-    'Last hour': '&sp=EgIIAQ%253D%253D',
-    'Today': '&sp=EgIIAg%253D%253D',
-    'This week': '&sp=EgIIAw%253D%253D',
+    'Last hour': '&sp=EgIIAQ%253D%253D', // Last hour filter
+    'Today': '&sp=EgIIAg%253D%253D', // Today filter
+    'This week': '&sp=EgIIAw%253D%253D', // This week filter
   };
 
-  const filterParam = filterMap[filter] || '';
+  const filterParam = filterMap[filter] || ''; // Default to no filter if invalid filter
   const browserPromises = [];
 
   for (let i = 0; i < windows; i++) {
@@ -48,10 +33,21 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
   const page = await browser.newPage();
 
   if (useProxies && proxies[i]) {
-    const proxy = proxies[i];
+    const { username, password, ip, port } = proxies[i];
+    // Use HTTP proxy with authentication
+    const proxyUrl = `http://${username}:${password}@${ip}:${port}`;
     await page.authenticate({
-      username: proxy.username,
-      password: proxy.password,
+      username: username,
+      password: password,
+    });
+    await page.setRequestInterception(true);
+    page.on('request', (request) => {
+      request.continue({
+        headers: {
+          ...request.headers(),
+          'Proxy-Authorization': `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`,
+        },
+      });
     });
   }
 
@@ -99,6 +95,24 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
   }
 }
 
+// Function to load proxies from a file
+function loadProxiesFromFile(filePath) {
+  const proxyList = [];
+  const data = fs.readFileSync(filePath, 'utf8').split('\n').filter(Boolean); // Read and split by line
+
+  data.forEach((line) => {
+    const [userPass, ipPort] = line.split('@');
+    const [username, password] = userPass.split(':');
+    const [ip, port] = ipPort.split(':');
+
+    if (username && password && ip && port) {
+      proxyList.push({ username, password, ip, port });
+    }
+  });
+
+  return proxyList;
+}
+
 // Main function to gather user input
 (async () => {
   const prompt = inquirer.createPromptModule();
@@ -128,10 +142,10 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     },
     {
       type: 'input',
-      name: 'proxiesFilePath',
-      message: 'Enter the path to the proxies file (e.g., proxies.txt):',
+      name: 'proxyFile',
+      message: 'Enter the path to the proxy file (e.g., proxies.txt):',
       when: (answers) => answers.useProxies,
-      default: 'proxies.txt', // Default file name
+      default: 'proxies.txt', // Default to 'proxies.txt'
     },
     {
       type: 'list',
@@ -149,8 +163,8 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
   ]);
 
   let proxies = [];
-  if (answers.useProxies && answers.proxiesFilePath) {
-    proxies = await readProxiesFromFile(answers.proxiesFilePath);
+  if (answers.useProxies) {
+    proxies = loadProxiesFromFile(answers.proxyFile);
   }
 
   await startAutomation(

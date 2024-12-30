@@ -2,7 +2,7 @@ const puppeteer = require('puppeteer');
 const inquirer = require('inquirer');
 
 // Function to start browser automation
-async function startAutomation(query, windows, useProxies, proxies, filter, channelName, headless) {
+async function startAutomation(query, windows, useProxies, proxies, filter, channelName) {
   // Map filters to the appropriate YouTube query parameter
   const filterMap = {
     'Last hour': '&sp=EgIIAQ%253D%253D',   // Last hour filter
@@ -17,7 +17,7 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
 
   for (let i = 0; i < windows; i++) {
     browserPromises.push(
-      openWindow(i, query, filterParam, useProxies, proxies, channelName, headless)
+      openWindow(i, query, filterParam, useProxies, proxies, channelName)
     );
   }
 
@@ -26,15 +26,13 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
 }
 
 // Function to open a single window
-async function openWindow(i, query, filterParam, useProxies, proxies, channelName, headless) {
+async function openWindow(i, query, filterParam, useProxies, proxies, channelName) {
   const browser = await puppeteer.launch({
-    headless: headless, // Run in headless mode if true
-    executablePath: '/usr/bin/chromium-browser', // Explicitly use the chromium-browser path
+    headless: false,
+    executablePath: '/snap/bin/chromium', // Updated to correct path for Ubuntu
     args: [
       '--window-size=800,600',
       '--disable-infobars',
-      '--no-sandbox', // Useful for VPS environments
-      '--disable-setuid-sandbox',
     ]
   });
 
@@ -45,6 +43,11 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
 
   const page = await browser.newPage();
   await page.setViewport({ width: windowWidth, height: windowHeight });
+
+  await page.evaluateOnNewDocument((x, y) => {
+    window.moveTo(x, y);
+    window.resizeTo(window.innerWidth, window.innerHeight);
+  }, windowX, windowY);
 
   if (useProxies && proxies[i]) {
     const proxy = proxies[i];
@@ -116,6 +119,21 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     await page.goto(matchedVideo.link); // Go to the video link
     await page.waitForSelector('video'); // Wait for the video to start
     console.log(`Window ${i + 1} is playing: ${matchedVideo.title} by ${matchedVideo.channel}`);
+
+    // Start tracking video playback time
+    await page.exposeFunction('logTimeUpdate', (currentTime) => {
+      console.log(`Window ${i + 1}: Video has played ${Math.floor(currentTime)} seconds.`);
+    });
+
+    // Inject a script into the page to listen for time updates from the video
+    await page.evaluate(() => {
+      const video = document.querySelector('video');
+      if (video) {
+        video.addEventListener('timeupdate', () => {
+          window.logTimeUpdate(video.currentTime); // Call the exposed function
+        });
+      }
+    });
   }
 }
 
@@ -160,12 +178,6 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
       choices: ['Last hour', 'Today', 'This week'],
       default: 'Last hour',
     },
-    {
-      type: 'confirm',
-      name: 'headless',
-      message: 'Do you want to run the browser in headless mode?',
-      default: false, // Default to showing the browser window
-    },
   ]);
 
   // Process the proxy list if provided
@@ -178,5 +190,5 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
   }
 
   // Start the automation with the user's input and filter
-  await startAutomation(answers.query, answers.windows, answers.useProxies, proxies, answers.filter, answers.channelName, answers.headless);
+  await startAutomation(answers.query, answers.windows, answers.useProxies, proxies, answers.filter, answers.channelName);
 })();

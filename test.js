@@ -1,137 +1,209 @@
 const puppeteer = require('puppeteer');
 const inquirer = require('inquirer');
+const fs = require('fs');
+
+// Function to read proxies from a file
+function readProxiesFromFile(filePath) {
+  try {
+    const proxyData = fs.readFileSync(filePath, 'utf8');
+    const proxies = proxyData.split('\n').map((line, index) => {
+      // Skip empty lines or invalid formats
+      if (!line.trim()) return null;
+
+      const [credentials, ipPort] = line.split('@');
+      if (!credentials || !ipPort) {
+        console.error(`Invalid proxy format at line ${index + 1}: ${line}`);
+        return null;
+      }
+
+      const [username, password] = credentials.split(':');
+      const [ip, port] = ipPort.split(':');
+
+      // Validate the parsed proxy structure
+      if (!username || !password || !ip || !port) {
+        console.error(`Invalid proxy format at line ${index + 1}: ${line}`);
+        return null;
+      }
+
+      return { username, password, ip, port };
+    }).filter(proxy => proxy !== null);  // Filter out invalid proxies
+
+    console.log(`Loaded ${proxies.length} valid proxies from the file.`);
+    return proxies;
+  } catch (error) {
+    console.error(`Error reading proxy file: ${error.message}`);
+    return [];
+  }
+}
 
 // Function to start browser automation
-async function startAutomation(query, windows, useProxies, proxies, filter, channelName) {
-  // Map filters to the appropriate YouTube query parameter
+async function startAutomation(query, windows, useProxies, proxies, filter, channelName, headless) {
   const filterMap = {
     'Last hour': '&sp=EgIIAQ%253D%253D',   // Last hour filter
     'Today': '&sp=EgIIAg%253D%253D',       // Today filter
     'This week': '&sp=EgIIAw%253D%253D'    // This week filter
   };
 
-  // Add the selected filter to the query string
-  const filterParam = filterMap[filter] || ''; // Default to no filter if invalid filter
-
+  const filterParam = filterMap[filter] || '';
   const browserPromises = [];
 
+  // Limit proxies to the number of windows (or loop through if there are fewer proxies)
+  const usableProxies = useProxies ? proxies.slice(0, windows) : proxies;
+
+  // Ensure proxies are assigned to each window
   for (let i = 0; i < windows; i++) {
+    const proxy = useProxies ? usableProxies[i % usableProxies.length] : null; // Loop through proxies if there are fewer than windows
     browserPromises.push(
-      openWindow(i, query, filterParam, useProxies, proxies, channelName)
+      openWindow(i, query, filterParam, useProxies, proxy, channelName, headless)
     );
   }
 
-  // Wait for all windows to open concurrently
-  await Promise.all(browserPromises);
+  await Promise.allSettled(browserPromises); // Use Promise.allSettled to handle errors gracefully
 }
 
-// Function to open a single window
-async function openWindow(i, query, filterParam, useProxies, proxies, channelName) {
-  const browser = await puppeteer.launch({
-    headless: false,
-    executablePath: '/usr/bin/chromium-browser', // Path to Chromium
-    args: [
-      '--window-size=800,600',
-      '--disable-infobars',
-      '--no-sandbox',  // Add this flag to avoid issues when running as root
-      '--disable-dev-shm-usage', // Optional: Fixes issues on some systems
-    ]
-  });
-
-  const windowWidth = 800;
-  const windowHeight = 600;
-  const windowX = 100 + i * (windowWidth + 20);
-  const windowY = 100;
-
-  const page = await browser.newPage(); // Declare `page` once here
-  await page.setViewport({ width: windowWidth, height: windowHeight });
-
-  // Move and resize the window
-  await page.evaluateOnNewDocument((x, y) => {
-    window.moveTo(x, y);
-    window.resizeTo(window.innerWidth, window.innerHeight);
-  }, windowX, windowY);
-
-  // Proxy settings (if enabled)
-  if (useProxies && proxies[i]) {
-    const proxy = proxies[i];
-    await page.authenticate({
-      username: proxy.username,
-      password: proxy.password,
+// Function to open a single browser window
+async function openWindow(i, query, filterParam, useProxies, proxy, channelName, headless) {
+  try {
+    const browser = await puppeteer.launch({
+      headless: headless, // Headless mode based on user input
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--disable-infobars',
+        '--window-size=800,600',
+        ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []), // Apply proxy server if provided
+      ],
     });
-    await page.setRequestInterception(true);
-    page.on('request', (request) => {
-      if (request.resourceType() === 'document') {
-        request.continue({
-          headers: {
-            ...request.headers(),
-            'Proxy-Authorization': `Basic ${Buffer.from(`${proxy.username}:${proxy.password}`).toString('base64')}`,
-          },
-        });
-      } else {
-        request.continue();
+
+    const page = await browser.newPage();
+
+    // Apply proxy authentication if needed
+    if (useProxies && proxy) {
+      await page.authenticate({
+        username: proxy.username,
+        password: proxy.password,
+      });
+    }
+
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}${filterParam}`;
+    console.log(`Window ${i + 1}: Navigating to: ${searchUrl}`);
+    await page.goto(searchUrl);
+    await page.waitForSelector('ytd-video-renderer');
+
+    const videos = await page.$$eval('ytd-video-renderer', (videoElements) => {
+      return videoElements.map((video) => {
+        const title = video.querySelector('#video-title')?.textContent?.trim();
+        const channel = video.querySelector('#channel-name')?.textContent?.trim();
+        const link = video.querySelector('a')?.href;
+        return { title, channel, link };
+      });
+    });
+
+    let matchedVideo = null;
+    if (channelName) {
+      matchedVideo = videos.find((video) => {
+        return video.channel && video.channel.toLowerCase().includes(channelName.toLowerCase());
+      });
+
+      if (matchedVideo) {
+        console.log(`Window ${i + 1}: Found video: ${matchedVideo.title} by ${matchedVideo.channel}`);
       }
-    });
-  }
+    }
 
-  // Go to YouTube and search for the query with the filter in the URL
-  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}${filterParam}`;
-  console.log(`Navigating to: ${searchUrl}`);
-  await page.goto(searchUrl);
+    if (!matchedVideo && channelName) {
+      console.log(`Window ${i + 1}: No video found from channel "${channelName}". Closing the window.`);
+      await browser.close();
+      return;
+    }
 
-  // Wait for the video results to load
-  await page.waitForSelector('ytd-video-renderer');
-
-  // Find all video titles and channel names
-  const videos = await page.$$eval('ytd-video-renderer', (videoElements) => {
-    return videoElements.map((video) => {
-      const title = video.querySelector('#video-title')?.textContent?.trim();
-      const channel = video.querySelector('#channel-name')?.textContent?.trim();
-      const link = video.querySelector('a')?.href;
-      return { title, channel, link };
-    });
-  });
-
-  let matchedVideo = null;
-
-  // If channelName is provided, find the video matching the channel name
-  if (channelName) {
-    matchedVideo = videos.find((video) => {
-      return video.channel && video.channel.toLowerCase().includes(channelName.toLowerCase());
-    });
+    if (!matchedVideo && !channelName) {
+      matchedVideo = videos[0];
+      console.log(`Window ${i + 1}: No channel filter provided. Selecting the first video.`);
+    }
 
     if (matchedVideo) {
-      console.log(`Found video: ${matchedVideo.title} by ${matchedVideo.channel}`);
+      await page.goto(matchedVideo.link);
+      await page.waitForSelector('video');
+      console.log(`Window ${i + 1} is playing: ${matchedVideo.title} by ${matchedVideo.channel}`);
     }
-  }
 
-  // If no match is found and channelName is provided, close the browser window
-  if (!matchedVideo && channelName) {
-    console.log(`No video found from channel "${channelName}". Closing the window.`);
-    await browser.close();
-    return; // Skip to the next window
+    showPlayingTime(page, i + 1);
+  } catch (error) {
+    console.error(`Window ${i + 1} encountered an error: ${error.message}`);
   }
+}
 
-  // If no matched video is found and no channel name was provided, select the first video
-  if (!matchedVideo && !channelName) {
-    console.log('No matching video found. Selecting the first video.');
-    matchedVideo = videos[0];
-  }
+// Function to show the playing time of the video
+async function showPlayingTime(page, windowNumber, interval = 2000) {
+  // Ensure the video resumes playback if paused
+  await ensureVideoIsPlaying(page);
 
-  // Go to the selected video link
-  if (matchedVideo) {
-    await page.goto(matchedVideo.link); // Go to the video link
-    await page.waitForSelector('video'); // Wait for the video to start
-    console.log(`Window ${i + 1} is playing: ${matchedVideo.title} by ${matchedVideo.channel}`);
+  console.log(`Playing time updates for Window ${windowNumber}:`);
+  let isPlaying = true;
+
+  while (isPlaying) {
+    const playbackStatus = await page.evaluate(() => {
+      const video = document.querySelector('video');
+      if (video) {
+        return {
+          currentTime: video.currentTime,
+          duration: video.duration,
+          paused: video.paused,
+          readyState: video.readyState,
+        };
+      }
+      return null;
+    });
+
+    if (playbackStatus) {
+      const { currentTime, duration, paused, readyState } = playbackStatus;
+
+      if (readyState < 3) {
+        console.log(`Window ${windowNumber}: Video is buffering or not ready yet...`);
+      } else {
+        console.log(
+          `Window ${windowNumber}: Current Time: ${currentTime.toFixed(2)}s / ${duration.toFixed(
+            2
+          )}s ${paused ? '(Paused)' : '(Playing)'}`
+        );
+      }
+
+      if (currentTime >= duration) {
+        isPlaying = false;
+        console.log(`Window ${windowNumber}: Playback has ended.`);
+      }
+    } else {
+      console.log(`Window ${windowNumber}: Video element not found.`);
+      isPlaying = false;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, interval));
   }
+}
+
+// Function to ensure the video is playing and resumes if paused
+async function ensureVideoIsPlaying(page) {
+  await page.evaluate(() => {
+    const video = document.querySelector('video');
+    if (video) {
+      setInterval(() => {
+        if (video.paused) {
+          console.log('Video is paused. Resuming playback...');
+          video.play();
+        }
+      }, 1000); // Check every second
+    }
+  });
 }
 
 // Main function to gather user input
 (async () => {
   const prompt = inquirer.createPromptModule();
 
-  // Ask user for input
-  const answers = await prompt([{
+  const answers = await prompt([    
+    {
       type: 'input',
       name: 'query',
       message: 'Enter the YouTube search query (video title or keywords):',
@@ -140,7 +212,7 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
       type: 'input',
       name: 'channelName',
       message: 'Enter the channel name you want to match (leave blank to skip):',
-      default: '', // Default empty string if not provided
+      default: '',
     },
     {
       type: 'number',
@@ -155,8 +227,8 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     },
     {
       type: 'input',
-      name: 'proxies',
-      message: 'Enter the list of proxies (comma separated) if you want to use them:',
+      name: 'proxyFilePath',
+      message: 'Enter the path of the proxy file (e.g., ./proxies.txt):',  // Use relative path
       when: (answers) => answers.useProxies,
     },
     {
@@ -166,17 +238,27 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
       choices: ['Last hour', 'Today', 'This week'],
       default: 'Last hour',
     },
+    {
+      type: 'confirm',
+      name: 'headless',
+      message: 'Do you want to use headless mode? (No UI)',
+      default: true, // Default value set to true (yes)
+    },
   ]);
 
-  // Process the proxy list if provided
   let proxies = [];
-  if (answers.proxies) {
-    proxies = answers.proxies.split(',').map((proxy) => {
-      const [username, password] = proxy.split(':');
-      return { username, password };
-    });
+  if (answers.useProxies && answers.proxyFilePath) {
+    proxies = readProxiesFromFile(answers.proxyFilePath);  // Use the dynamic file path
   }
 
-  // Start the automation with the user's input and filter
-  await startAutomation(answers.query, answers.windows, answers.useProxies, proxies, answers.filter, answers.channelName);
+  // Now pass proxies to the startAutomation function as needed
+  await startAutomation(
+    answers.query,
+    answers.windows,
+    answers.useProxies,
+    proxies,
+    answers.filter,
+    answers.channelName,
+    answers.headless
+  );
 })();

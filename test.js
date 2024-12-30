@@ -3,15 +3,13 @@ const inquirer = require('inquirer');
 
 // Function to start browser automation
 async function startAutomation(query, windows, useProxies, proxies, filter, channelName) {
-  // Map filters to the appropriate YouTube query parameter
   const filterMap = {
     'Last hour': '&sp=EgIIAQ%253D%253D',   // Last hour filter
     'Today': '&sp=EgIIAg%253D%253D',       // Today filter
     'This week': '&sp=EgIIAw%253D%253D'    // This week filter
   };
 
-  // Add the selected filter to the query string
-  const filterParam = filterMap[filter] || ''; // Default to no filter if invalid filter
+  const filterParam = filterMap[filter] || '';
 
   const browserPromises = [];
 
@@ -21,7 +19,6 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
     );
   }
 
-  // Wait for all windows to open concurrently
   await Promise.all(browserPromises);
 }
 
@@ -29,7 +26,7 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
 async function openWindow(i, query, filterParam, useProxies, proxies, channelName) {
   const browser = await puppeteer.launch({
     headless: false,
-    executablePath: '/snap/bin/chromium', // Updated to correct path for Ubuntu
+    executablePath: '/usr/bin/chromium-browser', // Correct Chromium path for Ubuntu
     args: [
       '--window-size=800,600',
       '--disable-infobars',
@@ -70,15 +67,12 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     });
   }
 
-  // Go to YouTube and search for the query with the filter in the URL
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}${filterParam}`;
   console.log(`Navigating to: ${searchUrl}`);
   await page.goto(searchUrl);
 
-  // Wait for the video results to load
   await page.waitForSelector('ytd-video-renderer');
 
-  // Find all video titles and channel names
   const videos = await page.$$eval('ytd-video-renderer', (videoElements) => {
     return videoElements.map((video) => {
       const title = video.querySelector('#video-title')?.textContent?.trim();
@@ -90,7 +84,6 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
 
   let matchedVideo = null;
 
-  // If channelName is provided, find the video matching the channel name
   if (channelName) {
     matchedVideo = videos.find((video) => {
       return video.channel && video.channel.toLowerCase().includes(channelName.toLowerCase());
@@ -101,36 +94,33 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     }
   }
 
-  // If no match is found and channelName is provided, close the browser window
   if (!matchedVideo && channelName) {
     console.log(`No video found from channel "${channelName}". Closing the window.`);
     await browser.close();
-    return; // Skip to the next window
+    return;
   }
 
-  // If no matched video is found and no channel name was provided, select the first video
   if (!matchedVideo && !channelName) {
     console.log('No matching video found. Selecting the first video.');
     matchedVideo = videos[0];
   }
 
-  // Go to the selected video link
   if (matchedVideo) {
-    await page.goto(matchedVideo.link); // Go to the video link
-    await page.waitForSelector('video'); // Wait for the video to start
+    await page.goto(matchedVideo.link);
+    await page.waitForSelector('video');
     console.log(`Window ${i + 1} is playing: ${matchedVideo.title} by ${matchedVideo.channel}`);
 
-    // Start tracking video playback time
-    await page.exposeFunction('logTimeUpdate', (currentTime) => {
-      console.log(`Window ${i + 1}: Video has played ${Math.floor(currentTime)} seconds.`);
+    // Expose a function to log live video playback updates
+    await page.exposeFunction('logPlaybackTime', (currentTime) => {
+      console.log(`Window ${i + 1}: Video playback time: ${Math.floor(currentTime)} seconds.`);
     });
 
-    // Inject a script into the page to listen for time updates from the video
+    // Inject a script to track the video playback time
     await page.evaluate(() => {
       const video = document.querySelector('video');
       if (video) {
         video.addEventListener('timeupdate', () => {
-          window.logTimeUpdate(video.currentTime); // Call the exposed function
+          window.logPlaybackTime(video.currentTime);
         });
       }
     });
@@ -141,7 +131,6 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
 (async () => {
   const prompt = inquirer.createPromptModule();
 
-  // Ask user for input
   const answers = await prompt([
     {
       type: 'input',
@@ -152,7 +141,7 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
       type: 'input',
       name: 'channelName',
       message: 'Enter the channel name you want to match (leave blank to skip):',
-      default: '', // Default empty string if not provided
+      default: '',
     },
     {
       type: 'number',
@@ -180,7 +169,6 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     },
   ]);
 
-  // Process the proxy list if provided
   let proxies = [];
   if (answers.proxies) {
     proxies = answers.proxies.split(',').map((proxy) => {
@@ -189,6 +177,5 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     });
   }
 
-  // Start the automation with the user's input and filter
   await startAutomation(answers.query, answers.windows, answers.useProxies, proxies, answers.filter, answers.channelName);
 })();

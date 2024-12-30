@@ -1,15 +1,31 @@
 const puppeteer = require('puppeteer');
 const inquirer = require('inquirer');
+const fs = require('fs').promises; // For reading the proxies file
+
+// Function to read proxies from a local file
+async function readProxiesFromFile(filePath) {
+  try {
+    const data = await fs.readFile(filePath, 'utf-8');
+    const proxyLines = data.split('\n').filter((line) => line.trim() !== ''); // Remove empty lines
+    return proxyLines.map((proxy) => {
+      const [username, password] = proxy.split(':');
+      return { username, password };
+    });
+  } catch (error) {
+    console.error(`Failed to read proxies from file (${filePath}):`, error.message);
+    return [];
+  }
+}
 
 // Function to start browser automation
 async function startAutomation(query, windows, useProxies, proxies, filter, channelName, headless) {
   const filterMap = {
-    'Last hour': '&sp=EgIIAQ%253D%253D', // Last hour filter
-    'Today': '&sp=EgIIAg%253D%253D', // Today filter
-    'This week': '&sp=EgIIAw%253D%253D', // This week filter
+    'Last hour': '&sp=EgIIAQ%253D%253D',
+    'Today': '&sp=EgIIAg%253D%253D',
+    'This week': '&sp=EgIIAw%253D%253D',
   };
 
-  const filterParam = filterMap[filter] || ''; // Default to no filter if invalid filter
+  const filterParam = filterMap[filter] || '';
   const browserPromises = [];
 
   for (let i = 0; i < windows; i++) {
@@ -78,10 +94,8 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
   }
 
   if (matchedVideo) {
-    await page.goto(matchedVideo.link); // Go to the video link
+    await page.goto(matchedVideo.link);
     console.log(`Window ${i + 1} is playing: ${matchedVideo.title} by ${matchedVideo.channel}`);
-
-    // Continuously update playback time in terminal
     await trackVideoPlayback(page);
   }
 }
@@ -106,14 +120,13 @@ async function trackVideoPlayback(page) {
     });
 
     if (playbackTime) {
-      console.clear(); // Clear the terminal for live updates
+      console.clear();
       console.log(`Playback Time: ${playbackTime.currentTime} / ${playbackTime.duration}`);
     } else {
       console.log('Video not found or not playing.');
     }
-  }, 1000); // Update every second
+  }, 1000);
 
-  // Stop tracking when video ends
   page.on('close', () => {
     clearInterval(intervalId);
   });
@@ -148,9 +161,10 @@ async function trackVideoPlayback(page) {
     },
     {
       type: 'input',
-      name: 'proxies',
-      message: 'Enter the list of proxies (comma separated) if you want to use them:',
+      name: 'proxiesFilePath',
+      message: 'Enter the path to the proxies file (e.g., proxies.txt):',
       when: (answers) => answers.useProxies,
+      default: 'proxies.txt', // Default file name
     },
     {
       type: 'list',
@@ -168,11 +182,8 @@ async function trackVideoPlayback(page) {
   ]);
 
   let proxies = [];
-  if (answers.proxies) {
-    proxies = answers.proxies.split(',').map((proxy) => {
-      const [username, password] = proxy.split(':');
-      return { username, password };
-    });
+  if (answers.useProxies && answers.proxiesFilePath) {
+    proxies = await readProxiesFromFile(answers.proxiesFilePath);
   }
 
   await startAutomation(

@@ -2,7 +2,7 @@ const puppeteer = require('puppeteer');
 const inquirer = require('inquirer');
 
 // Function to start browser automation
-async function startAutomation(query, windows, useProxies, proxies, filter, channelName) {
+async function startAutomation(query, windows, useProxies, proxies, filter, channelName, headless) {
   // Map filters to the appropriate YouTube query parameter
   const filterMap = {
     'Last hour': '&sp=EgIIAQ%253D%253D',   // Last hour filter
@@ -17,7 +17,7 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
 
   for (let i = 0; i < windows; i++) {
     browserPromises.push(
-      openWindow(i, query, filterParam, useProxies, proxies, channelName)
+      openWindow(i, query, filterParam, useProxies, proxies, channelName, headless)
     );
   }
 
@@ -26,12 +26,15 @@ async function startAutomation(query, windows, useProxies, proxies, filter, chan
 }
 
 // Function to open a single window
-async function openWindow(i, query, filterParam, useProxies, proxies, channelName) {
+async function openWindow(i, query, filterParam, useProxies, proxies, channelName, headless) {
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: headless, // Run in headless mode if true
+    executablePath: '/usr/bin/chromium-browser', // Explicitly use the chromium-browser path
     args: [
       '--window-size=800,600',
       '--disable-infobars',
+      '--no-sandbox', // Useful for VPS environments
+      '--disable-setuid-sandbox',
     ]
   });
 
@@ -42,11 +45,6 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
 
   const page = await browser.newPage();
   await page.setViewport({ width: windowWidth, height: windowHeight });
-
-  await page.evaluateOnNewDocument((x, y) => {
-    window.moveTo(x, y);
-    window.resizeTo(window.innerWidth, window.innerHeight);
-  }, windowX, windowY);
 
   if (useProxies && proxies[i]) {
     const proxy = proxies[i];
@@ -162,6 +160,12 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
       choices: ['Last hour', 'Today', 'This week'],
       default: 'Last hour',
     },
+    {
+      type: 'confirm',
+      name: 'headless',
+      message: 'Do you want to run the browser in headless mode?',
+      default: false, // Default to showing the browser window
+    },
   ]);
 
   // Process the proxy list if provided
@@ -174,5 +178,5 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
   }
 
   // Start the automation with the user's input and filter
-  await startAutomation(answers.query, answers.windows, answers.useProxies, proxies, answers.filter, answers.channelName);
+  await startAutomation(answers.query, answers.windows, answers.useProxies, proxies, answers.filter, answers.channelName, answers.headless);
 })();

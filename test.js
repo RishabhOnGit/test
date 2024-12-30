@@ -94,42 +94,9 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
   }
 
   if (matchedVideo) {
-    await page.goto(matchedVideo.link);
+    await page.goto(matchedVideo.link); // Go to the video link
     console.log(`Window ${i + 1} is playing: ${matchedVideo.title} by ${matchedVideo.channel}`);
-    await trackVideoPlayback(page);
   }
-}
-
-// Function to track video playback and log in the terminal
-async function trackVideoPlayback(page) {
-  const intervalId = setInterval(async () => {
-    const playbackTime = await page.evaluate(() => {
-      const video = document.querySelector('video');
-      if (!video) return null;
-
-      const formatTime = (time) => {
-        const minutes = Math.floor(time / 60);
-        const seconds = Math.floor(time % 60).toString().padStart(2, '0');
-        return `${minutes}:${seconds}`;
-      };
-
-      return {
-        currentTime: formatTime(video.currentTime),
-        duration: formatTime(video.duration),
-      };
-    });
-
-    if (playbackTime) {
-      console.clear();
-      console.log(`Playback Time: ${playbackTime.currentTime} / ${playbackTime.duration}`);
-    } else {
-      console.log('Video not found or not playing.');
-    }
-  }, 1000);
-
-  page.on('close', () => {
-    clearInterval(intervalId);
-  });
 }
 
 // Main function to gather user input

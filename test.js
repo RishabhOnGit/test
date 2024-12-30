@@ -121,6 +121,13 @@ async function openWindow(i, query, filterParam, useProxies, proxies, channelNam
     await page.goto(matchedVideo.link); // Go to the video link
     await page.waitForSelector('video'); // Wait for the video to start
     console.log(`Window ${i + 1} is playing: ${matchedVideo.title} by ${matchedVideo.channel}`);
+
+    // Track the played time every second
+    setInterval(async () => {
+      const currentTime = await page.$eval('video', (video) => video.currentTime);
+      const duration = await page.$eval('video', (video) => video.duration);
+      process.stdout.write(`Window ${i + 1} - Played time: ${currentTime.toFixed(2)} / ${duration.toFixed(2)} seconds\r`);
+    }, 1000); // Update every second
   }
 }
 

@@ -112,8 +112,10 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     await page.click('button[aria-label="Search"]'); // Click the search button
 
     // Wait for search results to load
-    console.log(`Window ${i + 1}: Waiting for search results to load.`);
-    await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
+    console.log(`Window ${i + 1}: Waiting for video to load.`);
+    await page.waitForSelector('video', { visible: true, timeout: 60000 })
+      .then(() => console.log(`Window ${i + 1}: Video loaded successfully.`))
+      .catch((error) => console.log(`Window ${i + 1}: Error - ${error.message}`));
 
     // Add a delay before applying the filter
     console.log(`Window ${i + 1}: Adding delay before applying the filter.`);
@@ -130,7 +132,7 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
 
     // Scroll randomly after applying the filter
-    
+    await scrollPage(page);
 
     // Click on the first video
     console.log(`Window ${i + 1}: Clicking on the first video.`);
@@ -141,11 +143,9 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 
     // Wait for the video page to load
     console.log(`Window ${i + 1}: Waiting for video to load.`);
-    await page.waitForSelector('video', { visible: true, timeout: 60000 })
-      .then(() => console.log(`Window ${i + 1}: Video loaded successfully.`))
-      .catch((error) => console.log(`Window ${i + 1}: Error - ${error.message}`));
+    await page.waitForSelector('video', { visible: true });
 
-   // Wait for video playback to actually start and then track video
+    // Wait for video playback to actually start and then track video
     console.log(`Window ${i + 1}: Waiting for video playback to start.`);
     await trackVideoPlayback(page, i); // Track video playback time
 
@@ -222,7 +222,9 @@ async function trackVideoPlayback(page, windowIndex) {
     }
 
     // Randomly scroll the page (up and down)
-  
+    if (Math.random() < 0.2) { // 20% chance to scroll during video playback
+      await scrollPage(page);
+    }
 
     // Wait for 3 seconds before updating again
     await delayFunction(3000); // Delay 3 seconds
@@ -230,6 +232,34 @@ async function trackVideoPlayback(page, windowIndex) {
 }
 
 // Function to randomly scroll the page (up and down)
+async function scrollPage(page) {
+  console.log('Scrolling randomly.');
+
+  // Wait for the page to load enough content (using delayFunction for timeout)
+  await delayFunction(3000); // 3 seconds delay to wait for the page content
+
+  // Get the scroll height of the page
+  const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
+
+  // Randomly scroll down
+  const randomScrollDown = Math.floor(Math.random() * (scrollHeight / 2)) + 100; // Random scroll down position (between 100 and half the scroll height)
+  console.log(`Scrolling down by ${randomScrollDown}px`);
+  await page.evaluate(scrollPos => window.scrollTo(0, scrollPos), randomScrollDown);
+
+  // Wait for a moment before scrolling back to the top
+  await delayFunction(4000); // 4 seconds delay after scrolling down
+
+  // Force scroll to the top
+  console.log('Forcing scroll to the top');
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  // Wait for a moment before finishing
+  await delayFunction(4000); // 4 seconds delay after scrolling to the top
+}
+
+
+
+
 
 
 // Function to create a delay using Promise-based setTimeout
@@ -246,9 +276,6 @@ async function humanizedType(page, selector, text) {
     await delayFunction(delay);
   }
 }
-
-// Function to randomly scroll the page (up and down)
-
 
 
 // Main function to gather user input

@@ -129,7 +129,7 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
 
     // Scroll randomly after applying the filter
-    await scrollPage(page);
+    
 
     // Click on the first video
     console.log(`Window ${i + 1}: Clicking on the first video.`);
@@ -219,9 +219,7 @@ async function trackVideoPlayback(page, windowIndex) {
     }
 
     // Randomly scroll the page (up and down)
-    if (Math.random() < 0.2) { // 20% chance to scroll during video playback
-      await scrollPage(page);
-    }
+  
 
     // Wait for 3 seconds before updating again
     await delayFunction(3000); // Delay 3 seconds
@@ -229,31 +227,6 @@ async function trackVideoPlayback(page, windowIndex) {
 }
 
 // Function to randomly scroll the page (up and down)
-async function scrollPage(page) {
-  console.log('Scrolling randomly.');
-
-  // Wait for the page to load enough content (using delayFunction for timeout)
-  await delayFunction(3000); // 3 seconds delay to wait for the page content
-
-  // Get the scroll height of the page
-  const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
-
-  // Randomly scroll down
-  const randomScrollDown = Math.floor(Math.random() * (scrollHeight / 2)) + 100; // Random scroll down position (between 100 and half the scroll height)
-  console.log(`Scrolling down by ${randomScrollDown}px`);
-  await page.evaluate(scrollPos => window.scrollTo(0, scrollPos), randomScrollDown);
-
-  // Wait for a moment before scrolling back up
-  await delayFunction(3000); // 3 seconds delay after scrolling down
-
-  // Randomly scroll up
-  const randomScrollUp = Math.floor(Math.random() * (scrollHeight / 2)) + 100; // Random scroll up position (between 100 and half the scroll height)
-  console.log(`Scrolling up by ${randomScrollUp}px`);
-  await page.evaluate(scrollPos => window.scrollTo(0, scrollPos), randomScrollUp);
-
-  // Wait for a moment before finishing
-  await delayFunction(3000); // 3 seconds delay after scrolling up
-}
 
 
 // Function to create a delay using Promise-based setTimeout
@@ -272,36 +245,7 @@ async function humanizedType(page, selector, text) {
 }
 
 // Function to randomly scroll the page (up and down)
-async function scrollPage(page) {
-  console.log('Scrolling randomly.');
 
-  // Wait for the page to load enough content (using delayFunction for timeout)
-  await delayFunction(3000); // 3 seconds delay to wait for the page content
-
-  // Get the scroll height of the page
-  const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
-
-  // Randomly scroll down
-  const randomScrollDown = Math.floor(Math.random() * (scrollHeight / 2)) + 100; // Random scroll down position (between 100 and half the scroll height)
-  console.log(`Scrolling down by ${randomScrollDown}px`);
-  await page.evaluate(scrollPos => window.scrollTo(0, scrollPos), randomScrollDown);
-
-  // Wait for a moment before scrolling back up
-  await delayFunction(3000); // 3 seconds delay after scrolling down
-
-  // Randomly scroll up
-  const randomScrollUp = Math.floor(Math.random() * (scrollHeight / 2)) + 100; // Random scroll up position (between 100 and half the scroll height)
-  console.log(`Scrolling up by ${randomScrollUp}px`);
-  await page.evaluate(scrollPos => window.scrollTo(0, scrollPos), randomScrollUp);
-
-  // Wait for a moment before finishing
-  await delayFunction(3000); // 3 seconds delay after scrolling up
-}
-
-// Delay function that resolves after a given time in ms
-function delayFunction(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 
 // Main function to gather user input

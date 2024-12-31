@@ -81,6 +81,7 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
         '--disable-gpu',
         '--disable-infobars',
         '--window-size=1024,600', // Set window size to 1024x600 (smaller window)
+        '--disable-software-rasterizer',
         ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
       defaultViewport: { width: 1024, height: 600 }, // Set the viewport size smaller (1024x600)
@@ -140,9 +141,11 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 
     // Wait for the video page to load
     console.log(`Window ${i + 1}: Waiting for video to load.`);
-    await page.waitForSelector('video', { visible: true });
+    await page.waitForSelector('video', { visible: true, timeout: 60000 })
+      .then(() => console.log(`Window ${i + 1}: Video loaded successfully.`))
+      .catch((error) => console.log(`Window ${i + 1}: Error - ${error.message}`));
 
-    // Wait for video playback to actually start and then track video
+   // Wait for video playback to actually start and then track video
     console.log(`Window ${i + 1}: Waiting for video playback to start.`);
     await trackVideoPlayback(page, i); // Track video playback time
 

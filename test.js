@@ -85,6 +85,7 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
         ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
       defaultViewport: { width: 1024, height: 600 }, // Set the viewport size smaller (1024x600)
+      timeout: 70000,
     });
 
     const page = await browser.newPage();
@@ -117,9 +118,9 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 
     // Add a delay before applying the filter
     console.log(`Window ${i + 1}: Adding delay before applying the filter.`);
-    await delayFunction(2000);
+    await delayFunction(1987);
     await page.click('button[aria-label="Search filters"]');
-    await delayFunction(3000); // Using setTimeout for delay (5 seconds)
+    await delayFunction(2398); // Using setTimeout for delay (5 seconds)
 
     // Apply filter by modifying the URL
     console.log(`Window ${i + 1}: Applying filter "${filterParam}".`);
@@ -245,14 +246,14 @@ async function scrollPage(page) {
   await page.evaluate(scrollPos => window.scrollTo(0, scrollPos), randomScrollDown);
 
   // Wait for a moment before scrolling back to the top
-  await delayFunction(4000); // 4 seconds delay after scrolling down
+  await delayFunction(3897); // 4 seconds delay after scrolling down
 
   // Force scroll to the top
   console.log('Forcing scroll to the top');
   await page.evaluate(() => window.scrollTo(0, 0));
 
   // Wait for a moment before finishing
-  await delayFunction(4000); // 4 seconds delay after scrolling to the top
+  await delayFunction(3786); // 4 seconds delay after scrolling to the top
 }
 
 

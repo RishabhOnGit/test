@@ -43,7 +43,7 @@ function readProxiesFromFile(filePath) {
   }
 }
 
-// Function to start browser automation
+// Function to start browser automation with batch processing
 async function startAutomation(query, windows, useProxies, proxies, userAgents, filter, channelName, headless) {
   const filterMap = {
     'Last hour': '&sp=EgIIAQ%253D%253D',
@@ -52,17 +52,24 @@ async function startAutomation(query, windows, useProxies, proxies, userAgents, 
   };
 
   const filterParam = filterMap[filter] || '';
+  const batchSize = 10; // Number of windows to open per batch
   const browserPromises = [];
 
   for (let i = 0; i < windows; i++) {
     const proxy = useProxies ? proxies[i % proxies.length] : null; // Rotate proxies
     const userAgent = userAgents[i % userAgents.length]; // Rotate user agents
+
     browserPromises.push(
       openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless)
     );
-  }
 
-  await Promise.allSettled(browserPromises);
+    // If we've reached a batch of 10 windows, wait for all to settle
+    if ((i + 1) % batchSize === 0 || i === windows - 1) {
+      console.log(`Batch ${Math.floor(i / batchSize) + 1}: Waiting for all windows in this batch to finish.`);
+      await Promise.allSettled(browserPromises);
+      browserPromises.length = 0; // Reset the browserPromises for the next batch
+    }
+  }
 }
 
 // Function to open a single browser window and track video playback
@@ -255,11 +262,6 @@ async function scrollPage(page) {
   await delayFunction(4000); // 4 seconds delay after scrolling to the top
 }
 
-
-
-
-
-
 // Function to create a delay using Promise-based setTimeout
 function delayFunction(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -274,7 +276,6 @@ async function humanizedType(page, selector, text) {
     await delayFunction(delay);
   }
 }
-
 
 // Main function to gather user input
 (async () => {

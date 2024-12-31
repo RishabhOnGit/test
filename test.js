@@ -176,8 +176,6 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     console.error(`Window ${i + 1} encountered an error: ${error.message}`);
   }
 }
-
-
 // Function to track video playback and update both current time and total duration every 3 seconds
 async function trackVideoPlayback(page, windowIndex) {
   let currentTime = 0;
@@ -186,19 +184,21 @@ async function trackVideoPlayback(page, windowIndex) {
   // Wait for video to start playing and get the total duration
   let videoStarted = false;
   while (!videoStarted) {
-    currentTime = await page.evaluate(() => {
+    const videoData = await page.evaluate(() => {
       const videoElement = document.querySelector('video');
       if (videoElement && videoElement.duration > 0) {
-        return videoElement.currentTime; // Get current time if video has a valid duration
+        return {
+          currentTime: videoElement.currentTime,
+          totalDuration: videoElement.duration,
+        };
       }
-      return 0; // Return 0 if video isn't ready yet
+      return { currentTime: 0, totalDuration: 0 }; // Return defaults if video isn't ready
     });
 
+    currentTime = videoData.currentTime;
+    totalDuration = videoData.totalDuration;
+
     if (currentTime > 0) {
-      totalDuration = await page.evaluate(() => {
-        const videoElement = document.querySelector('video');
-        return videoElement ? videoElement.duration : 0; // Get total duration of the video
-      });
       videoStarted = true; // Video has started playing
     } else {
       await delayFunction(2000); // Wait for 2 seconds before checking again
@@ -207,25 +207,27 @@ async function trackVideoPlayback(page, windowIndex) {
 
   // Loop to fetch both current time and total duration every 3 seconds
   while (true) {
-    // Fetch current playback time and total video duration
     const videoData = await page.evaluate(() => {
       const videoElement = document.querySelector('video');
       if (videoElement) {
-        const currentTime = videoElement.currentTime;
-        const totalDuration = videoElement.duration;
-        return { currentTime, totalDuration };
+        return {
+          currentTime: videoElement.currentTime || 0,
+          totalDuration: videoElement.duration || 0,
+        };
       }
-      return { currentTime: 0, totalDuration: 0 }; // If video element is not found, return default values
+      return { currentTime: 0, totalDuration: 0 }; // Default if video element is not found
     });
 
-    currentTime = videoData.currentTime;
-    totalDuration = videoData.totalDuration;
+    currentTime = videoData.currentTime || 0;
+    totalDuration = videoData.totalDuration || 0;
 
     // Print current time and total duration in the format {currentTime}/{totalDuration}
-    console.log(`Window ${windowIndex + 1}: ${currentTime.toFixed(2)} / ${totalDuration.toFixed(2)} seconds`);
+    console.log(
+      `Window ${windowIndex + 1}: ${currentTime.toFixed(2)} / ${totalDuration.toFixed(2)} seconds`
+    );
 
     // Randomly pause and replay the video
-    if (Math.random() < 0.15) {  // 15% chance to pause/replay
+    if (Math.random() < 0.15) { // 15% chance to pause/replay
       console.log(`Window ${windowIndex + 1}: Pausing the video.`);
       await page.evaluate(() => {
         const videoElement = document.querySelector('video');
@@ -245,10 +247,13 @@ async function trackVideoPlayback(page, windowIndex) {
     }
 
     // Randomly forward or backward the video
-    if (Math.random() < 0.1) {  // 10% chance to forward/backward
+    if (Math.random() < 0.1) { // 10% chance to forward/backward
       const seekTime = Math.random() * 10; // Seek within the next 10 seconds
       const seekDirection = Math.random() > 0.5 ? 1 : -1; // Randomly choose forward or backward
-      const newTime = Math.max(0, Math.min(currentTime + seekDirection * seekTime, totalDuration)); // Avoid negative time
+      const newTime = Math.max(
+        0,
+        Math.min(currentTime + seekDirection * seekTime, totalDuration)
+      ); // Avoid negative time or exceeding total duration
       console.log(`Window ${windowIndex + 1}: Seeking to ${newTime.toFixed(2)} seconds.`);
       await page.evaluate(newTime => {
         const videoElement = document.querySelector('video');
@@ -267,7 +272,6 @@ async function trackVideoPlayback(page, windowIndex) {
     await delayFunction(3000); // Delay 3 seconds
   }
 }
-
 
 // Function to randomly scroll the page (up and down)
 async function scrollPage(page) {

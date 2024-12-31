@@ -55,29 +55,29 @@ async function startAutomation(query, windows, useProxies, proxies, userAgents, 
   const batchSize = 10; // Number of windows to open per batch
   const browserPromises = [];
 
+  // Open all windows first
   for (let i = 0; i < windows; i++) {
     const proxy = useProxies ? proxies[i % proxies.length] : null; // Rotate proxies
     const userAgent = userAgents[i % userAgents.length]; // Rotate user agents
 
-    browserPromises.push(
-      openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless)
-    );
+    browserPromises.push(openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless));
+  }
 
-    // If we've reached a batch of 10 windows, wait for all to settle
-    if ((i + 1) % batchSize === 0 || i === windows - 1) {
-      console.log(`Batch ${Math.floor(i / batchSize) + 1}: Waiting for all windows in this batch to finish.`);
-      await Promise.allSettled(browserPromises);
-      browserPromises.length = 0; // Reset the browserPromises for the next batch
-    }
+  // Wait for all windows to be open
+  console.log("Waiting for all windows to open.");
+  await Promise.allSettled(browserPromises);
+
+  // Now start the tasks after all windows are open
+  console.log("Starting tasks in all windows.");
+  for (let i = 0; i < windows; i++) {
+    // Perform the tasks step by step in each window
+    await performTasksInWindow(i, query, filterParam, useProxies, proxies[i % proxies.length], userAgents[i % userAgents.length], channelName, headless);
   }
 }
 
-// Function to open a single browser window and track video playback
+// Function to open a single browser window
 async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless) {
   try {
-    // Set the navigation timeout based on the proxy usage
-    const navigationTimeout = useProxies ? 900000 : 90000; // Timeout for navigation
-
     const browser = await puppeteer.launch({
       headless: headless,
       executablePath: '/usr/bin/chromium-browser',
@@ -87,17 +87,16 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
         '--disable-accelerated-2d-canvas',
         '--disable-gpu',
         '--disable-infobars',
-        '--window-size=1024,600', // Set window size to 1024x600 (smaller window)
+        '--window-size=1024,600',
         '--disable-software-rasterizer',
         ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
-      defaultViewport: { width: 1024, height: 600 }, // Set the viewport size smaller (1024x600)
+      defaultViewport: { width: 1024, height: 600 },
     });
 
     const page = await browser.newPage();
     await page.setUserAgent(userAgent);
 
-    // Apply proxy authentication if needed
     if (useProxies && proxy) {
       await page.authenticate({
         username: proxy.username,
@@ -105,161 +104,139 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
       });
     }
 
-    // Set the navigation timeout for the page
-    await page.setDefaultNavigationTimeout(navigationTimeout);  // Explicitly set the default navigation timeout
+    await page.setDefaultNavigationTimeout(90000);  // Set navigation timeout
 
-    // Navigate to YouTube
-    console.log(`Window ${i + 1}: Navigating to YouTube homepage.`);
+    console.log(`Window ${i + 1}: Opening YouTube.`);
     await page.goto('https://www.youtube.com', { waitUntil: 'domcontentloaded' });
 
-    // Search for the query
-    console.log(`Window ${i + 1}: Searching for "${query}".`);
-    await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
-    await humanizedType(page, 'input[name="search_query"]', query); // Humanized typing
-    await page.click('button[aria-label="Search"]'); // Click the search button
-
-    // Wait for search results to load
-    console.log(`Window ${i + 1}: Waiting for search results to load.`);
-    await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
-
-    // Add a delay before applying the filter
-    console.log(`Window ${i + 1}: Adding delay before applying the filter.`);
-    await delayFunction(2000);
-    await page.click('button[aria-label="Search filters"]');
-    await delayFunction(3000); // Using setTimeout for delay (5 seconds)
-
-    // Apply filter by modifying the URL
-    console.log(`Window ${i + 1}: Applying filter "${filterParam}".`);
-    const newUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}${filterParam}`;
-    await page.goto(newUrl, { waitUntil: 'domcontentloaded' });
-
-    // Wait for filtered results
-    await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
-
-    // Scroll randomly after applying the filter
-    await scrollPage(page);
-
-    // Click on the first video
-    console.log(`Window ${i + 1}: Clicking on the first video.`);
-    const videoSelector = 'ytd-video-renderer #video-title';
-    await page.waitForSelector(videoSelector, { visible: true });
-    const firstVideo = await page.$(videoSelector);
-    await firstVideo.click();
-
-    // Wait for the video page to load
-    console.log(`Window ${i + 1}: Waiting for video to load.`);
-    await page.waitForSelector('video', { visible: true });
-
-    // Wait for video playback to actually start and then track video
-    console.log(`Window ${i + 1}: Waiting for video playback to start.`);
-    await trackVideoPlayback(page, i); // Track video playback time
-
-    // Close the browser after playback
-    console.log(`Window ${i + 1}: Closing the browser.`);
+    // Open window without performing tasks
+    console.log(`Window ${i + 1}: Window opened without performing tasks.`);
     await browser.close();
   } catch (error) {
     console.error(`Window ${i + 1} encountered an error: ${error.message}`);
   }
 }
 
-// Function to track video playback and update both current time and total duration every 3 seconds
-async function trackVideoPlayback(page, windowIndex) {
-  let currentTime = 0;
-  let totalDuration = 0;  // Variable to store total video duration
-
-  // Wait for video to start playing and get the total duration
-  let videoStarted = false;
-  while (!videoStarted) {
-    currentTime = await page.evaluate(() => {
-      const videoElement = document.querySelector('video');
-      if (videoElement && videoElement.duration > 0) {
-        return videoElement.currentTime; // Get current time if video has a valid duration
-      }
-      return 0; // Return 0 if video isn't ready yet
+// Function to perform tasks after opening all windows
+async function performTasksInWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless) {
+  try {
+    const browser = await puppeteer.launch({
+      headless: headless,
+      executablePath: '/usr/bin/chromium-browser',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--disable-infobars',
+        '--window-size=1024,600',
+        '--disable-software-rasterizer',
+        ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
+      ],
+      defaultViewport: { width: 1024, height: 600 },
     });
 
-    if (currentTime > 0) {
-      totalDuration = await page.evaluate(() => {
-        const videoElement = document.querySelector('video');
-        return videoElement ? videoElement.duration : 0; // Get total duration of the video
-      });
-      videoStarted = true; // Video has started playing
-    } else {
-      await delayFunction(2000); // Wait for 2 seconds before checking again
-    }
-  }
+    const page = await browser.newPage();
+    await page.setUserAgent(userAgent);
 
-  // Loop to fetch both current time and total duration every 3 seconds
+    if (useProxies && proxy) {
+      await page.authenticate({
+        username: proxy.username,
+        password: proxy.password,
+      });
+    }
+
+    await page.setDefaultNavigationTimeout(90000);  // Set navigation timeout
+
+    console.log(`Window ${i + 1}: Performing task - Searching for "${query}".`);
+    await page.goto('https://www.youtube.com', { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('input[name="search_query"]');
+    await humanizedType(page, 'input[name="search_query"]', query);
+    await page.click('button[aria-label="Search"]');
+
+    console.log(`Window ${i + 1}: Applying filter "${filterParam}".`);
+    const newUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}${filterParam}`;
+    await page.goto(newUrl, { waitUntil: 'domcontentloaded' });
+
+    await page.waitForSelector('ytd-video-renderer', { visible: true });
+
+    console.log(`Window ${i + 1}: Clicking the first video.`);
+    const videoSelector = 'ytd-video-renderer #video-title';
+    await page.waitForSelector(videoSelector, { visible: true });
+    const firstVideo = await page.$(videoSelector);
+    await firstVideo.click();
+
+    console.log(`Window ${i + 1}: Waiting for video to play.`);
+    await page.waitForSelector('video', { visible: true });
+
+    await trackVideoPlayback(page, i);
+
+    console.log(`Window ${i + 1}: Closing the browser.`);
+    await browser.close();
+  } catch (error) {
+    console.error(`Error in Window ${i + 1}: ${error.message}`);
+  }
+}
+
+// Function to track video playback
+async function trackVideoPlayback(page, windowIndex) {
+  let currentTime = 0;
+  let totalDuration = 0;
+
   while (true) {
-    // Fetch current playback time and total video duration
     const videoData = await page.evaluate(() => {
       const videoElement = document.querySelector('video');
       if (videoElement) {
         const currentTime = videoElement.currentTime;
         const totalDuration = videoElement.duration;
-        // If video reaches the end, reset the time to 0 to loop it
         if (currentTime >= totalDuration - 1) {
-          videoElement.currentTime = 0; // Reset to the start of the video
+          videoElement.currentTime = 0;
         }
         return { currentTime, totalDuration };
       }
-      return { currentTime: 0, totalDuration: 0 }; // If video element is not found, return default values
+      return { currentTime: 0, totalDuration: 0 };
     });
 
     currentTime = videoData.currentTime;
     totalDuration = videoData.totalDuration;
 
-    // Print current time and total duration in the format {currentTime}/{totalDuration}
     console.log(`Window ${windowIndex + 1}: ${currentTime.toFixed(2)} / ${totalDuration.toFixed(2)} seconds`);
 
-    // Randomly forward or backward the video
-    if (Math.random() < 0.1) {  // 10% chance to forward/backward
-      const seekTime = Math.random() * 10; // Seek within the next 10 seconds
-      const seekDirection = Math.random() > 0.5 ? 1 : -1; // Randomly choose forward or backward
-      const newTime = Math.max(0, Math.min(currentTime + seekDirection * seekTime, 9999)); // Avoid negative time
+    if (Math.random() < 0.1) {
+      const seekTime = Math.random() * 10;
+      const seekDirection = Math.random() > 0.5 ? 1 : -1;
+      const newTime = Math.max(0, Math.min(currentTime + seekDirection * seekTime, 9999));
       console.log(`Window ${windowIndex + 1}: Seeking to ${newTime.toFixed(2)} seconds.`);
       await page.evaluate(newTime => {
         const videoElement = document.querySelector('video');
         if (videoElement) {
-          videoElement.currentTime = newTime; // Seek to new time
+          videoElement.currentTime = newTime;
         }
       }, newTime);
     }
 
-    // Randomly scroll the page (up and down)
-    if (Math.random() < 0.2) { // 20% chance to scroll during video playback
+    if (Math.random() < 0.2) {
       await scrollPage(page);
     }
 
-    // Wait for 3 seconds before updating again
-    await delayFunction(3000); // Delay 3 seconds
+    await delayFunction(3000);
   }
 }
 
-// Function to randomly scroll the page (up and down)
+// Function to randomly scroll the page
 async function scrollPage(page) {
   console.log('Scrolling randomly.');
+  await delayFunction(3000);
 
-  // Wait for the page to load enough content (using delayFunction for timeout)
-  await delayFunction(3000); // 3 seconds delay to wait for the page content
-
-  // Get the scroll height of the page
   const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
-
-  // Randomly scroll down
-  const randomScrollDown = Math.floor(Math.random() * (scrollHeight / 2)) + 100; // Random scroll down position (between 100 and half the scroll height)
+  const randomScrollDown = Math.floor(Math.random() * (scrollHeight / 2)) + 100;
   console.log(`Scrolling down by ${randomScrollDown}px`);
   await page.evaluate(scrollPos => window.scrollTo(0, scrollPos), randomScrollDown);
 
-  // Wait for a moment before scrolling back to the top
-  await delayFunction(4000); // 4 seconds delay after scrolling down
-
-  // Force scroll to the top
+  await delayFunction(4000);
   console.log('Forcing scroll to the top');
   await page.evaluate(() => window.scrollTo(0, 0));
-
-  // Wait for a moment before finishing
-  await delayFunction(4000); // 4 seconds delay after scrolling to the top
+  await delayFunction(4000);
 }
 
 // Function to create a delay using Promise-based setTimeout
@@ -267,12 +244,12 @@ function delayFunction(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Humanized typing delay (Random delay between 50ms and 90ms per character)
+// Humanized typing delay
 async function humanizedType(page, selector, text) {
   const inputField = await page.$(selector);
   for (let i = 0; i < text.length; i++) {
     await inputField.type(text.charAt(i));
-    const delay = Math.floor(Math.random() * (100 - 50 + 1)) + 50; // Random delay between 50ms and 90ms
+    const delay = Math.floor(Math.random() * (100 - 50 + 1)) + 50;
     await delayFunction(delay);
   }
 }
@@ -282,14 +259,14 @@ async function humanizedType(page, selector, text) {
   const prompt = inquirer.createPromptModule();
 
   const answers = await prompt([  
-    { type: 'input', name: 'query', message: 'Enter the YouTube search query (video title or keywords):' },
+    { type: 'input', name: 'query', message: 'Enter the YouTube search query:' },
     { type: 'input', name: 'channelName', message: 'Enter the channel name you want to match (leave blank to skip):', default: '' },
     { type: 'number', name: 'windows', message: 'Enter the number of browser windows to open:', default: 1 },
     { type: 'confirm', name: 'useProxies', message: 'Do you want to use proxies?', default: true },
     { type: 'input', name: 'proxyFilePath', message: 'Enter the path of the proxy file:', default: path.join(__dirname, 'proxies.txt'), when: answers => answers.useProxies },
     { type: 'input', name: 'userAgentFilePath', message: 'Enter the path of the user agent file:', default: path.join(__dirname, 'useragent.txt') },
-    { type: 'list', name: 'filter', message: 'Select the filter to apply to the search results:', choices: ['Last hour', 'Today', 'This week'], default: 'Last hour' },
-    { type: 'confirm', name: 'headless', message: 'Do you want to use headless mode? (No UI)', default: true },
+    { type: 'list', name: 'filter', message: 'Select the filter to apply:', choices: ['Last hour', 'Today', 'This week'], default: 'Last hour' },
+    { type: 'confirm', name: 'headless', message: 'Use headless mode?', default: true },
   ]);
 
   let proxies = [];

@@ -125,7 +125,7 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 
     // Navigate to YouTube
     console.log(`Window ${i + 1}: Navigating to YouTube homepage.`);
-    await navigateWithRetry(page, 'https://www.youtube.com', 3, 60000);  // Retry 3 times with 60 seconds timeout
+    await navigateWithRetry(page, 'https://www.youtube.com', 5, 60000);  // Retry 3 times with 60 seconds timeout
     
     // Search for the query
     console.log(`Window ${i + 1}: Searching for "${query}".`);

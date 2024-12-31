@@ -112,10 +112,8 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     await page.click('button[aria-label="Search"]'); // Click the search button
 
     // Wait for search results to load
-    console.log(`Window ${i + 1}: Waiting for video to load.`);
-    await page.waitForSelector('video', { visible: true, timeout: 60000 })
-      .then(() => console.log(`Window ${i + 1}: Video loaded successfully.`))
-      .catch((error) => console.log(`Window ${i + 1}: Error - ${error.message}`));
+    console.log(`Window ${i + 1}: Waiting for search results to load.`);
+    await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
 
     // Add a delay before applying the filter
     console.log(`Window ${i + 1}: Adding delay before applying the filter.`);
@@ -286,11 +284,11 @@ async function humanizedType(page, selector, text) {
     { type: 'input', name: 'query', message: 'Enter the YouTube search query (video title or keywords):' },
     { type: 'input', name: 'channelName', message: 'Enter the channel name you want to match (leave blank to skip):', default: '' },
     { type: 'number', name: 'windows', message: 'Enter the number of browser windows to open:', default: 1 },
-    { type: 'confirm', name: 'useProxies', message: 'Do you want to use proxies?', default: false },
+    { type: 'confirm', name: 'useProxies', message: 'Do you want to use proxies?', default: true },
     { type: 'input', name: 'proxyFilePath', message: 'Enter the path of the proxy file:', default: path.join(__dirname, 'proxies.txt'), when: answers => answers.useProxies },
     { type: 'input', name: 'userAgentFilePath', message: 'Enter the path of the user agent file:', default: path.join(__dirname, 'useragent.txt') },
     { type: 'list', name: 'filter', message: 'Select the filter to apply to the search results:', choices: ['Last hour', 'Today', 'This week'], default: 'Last hour' },
-    { type: 'confirm', name: 'headless', message: 'Do you want to use headless mode? (No UI)', default: false },
+    { type: 'confirm', name: 'headless', message: 'Do you want to use headless mode? (No UI)', default: true },
   ]);
 
   let proxies = [];

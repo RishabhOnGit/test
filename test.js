@@ -73,6 +73,7 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 
     const browser = await puppeteer.launch({
       headless: headless,
+      executablePath: '/usr/bin/chromium-browser',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',

@@ -84,7 +84,7 @@ async function startAutomation(query, windows, useProxies, proxies, userAgents, 
   };
 
   const filterParam = filterMap[filter] || '';
-  const batchSize = 3; // Number of browser windows to open in parallel
+  const batchSize = 10; // Number of browser windows to open in parallel
   const totalBatches = Math.ceil(windows / batchSize);
 
   for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
@@ -115,7 +115,6 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 
     browser = await puppeteer.launch({
       headless: headless,
-      executablePath: '/usr/bin/chromium-browser',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -184,36 +183,65 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
   }
 }
 
-// Function to track video playback and update both current time and total duration every 3 seconds
-async function trackVideoPlayback(page, windowIndex) {
+async function trackVideoPlayback(page, windowIndex, browser) {
+  const playbackTimeout = 20000; // Timeout for playback to start (45 seconds)
   let currentTime = 0;
-  let totalDuration = 0;  // Variable to store total video duration
+  let totalDuration = 0;
+  let playbackStarted = false;
 
-  // Wait for video to start playing and get the total duration
-  let videoStarted = false;
-  while (!videoStarted) {
-    const videoData = await page.evaluate(() => {
-      const videoElement = document.querySelector('video');
-      if (videoElement && videoElement.duration > 0) {
-        return {
-          currentTime: videoElement.currentTime,
-          totalDuration: videoElement.duration,
-        };
+  const maxRetries = 3; // Maximum number of retries for refreshing the page
+  let retryCount = 0;
+
+  while (!playbackStarted && retryCount < maxRetries) {
+    const startPlaybackTime = Date.now(); // Start time for the timeout check
+
+    while (!playbackStarted) {
+      const videoData = await page.evaluate(() => {
+        const videoElement = document.querySelector('video');
+        if (videoElement && videoElement.duration > 0) {
+          return {
+            currentTime: videoElement.currentTime,
+            totalDuration: videoElement.duration,
+          };
+        }
+        return { currentTime: 0, totalDuration: 0 }; // Default values if video isn't ready
+      });
+
+      currentTime = videoData.currentTime;
+      totalDuration = videoData.totalDuration;
+
+      if (currentTime > 0) {
+        playbackStarted = true; // Video has started playing
+        console.log(`Window ${windowIndex + 1}: Video playback started.`);
+        break;
       }
-      return { currentTime: 0, totalDuration: 0 }; // Return defaults if video isn't ready
-    });
 
-    currentTime = videoData.currentTime;
-    totalDuration = videoData.totalDuration;
+      if (Date.now() - startPlaybackTime > playbackTimeout) {
+        console.log(
+          `Window ${windowIndex + 1}: Video did not start within 45 seconds. Refreshing the page (Attempt ${retryCount + 1}/${maxRetries}).`
+        );
+        retryCount++;
+        if (retryCount < maxRetries) {
+          await page.reload({ waitUntil: 'domcontentloaded' }); // Refresh the page
+          await page.waitForSelector('video', { visible: true, timeout: 30000 }); // Wait for video to load
+        } else {
+          console.error(`Window ${windowIndex + 1}: Maximum retries reached. Video playback failed.`);
+          return; // Exit after maximum retries
+        }
+        break; // Exit the inner loop and retry playback tracking
+      }
 
-    if (currentTime > 0) {
-      videoStarted = true; // Video has started playing
-    } else {
       await delayFunction(2000); // Wait for 2 seconds before checking again
     }
   }
 
-  // Loop to fetch both current time and total duration every 3 seconds
+  // If playback did not start, exit
+  if (!playbackStarted) {
+    console.error(`Window ${windowIndex + 1}: Failed to start video playback.`);
+    return;
+  }
+
+  // Continue playback tracking if the video has started
   while (true) {
     const videoData = await page.evaluate(() => {
       const videoElement = document.querySelector('video');
@@ -229,13 +257,19 @@ async function trackVideoPlayback(page, windowIndex) {
     currentTime = videoData.currentTime || 0;
     totalDuration = videoData.totalDuration || 0;
 
-    // Print current time and total duration in the format {currentTime}/{totalDuration}
     console.log(
       `Window ${windowIndex + 1}: ${currentTime.toFixed(2)} / ${totalDuration.toFixed(2)} seconds`
     );
 
+    // Kill the browser if the current time is within 6 seconds of the total duration
+    if (totalDuration > 0 && totalDuration - currentTime <= 6) {
+      console.log(`Window ${windowIndex + 1}: Video playback is within 6 seconds of ending. Closing the browser.`);
+      await browser.close(); // Kill the browser
+      return; // Exit the function
+    }
+
     // Randomly pause and replay the video
-    if (Math.random() < 0.15) { // 15% chance to pause/replay
+    if (Math.random() < 0.15) {
       console.log(`Window ${windowIndex + 1}: Pausing the video.`);
       await page.evaluate(() => {
         const videoElement = document.querySelector('video');
@@ -243,7 +277,7 @@ async function trackVideoPlayback(page, windowIndex) {
           videoElement.pause(); // Pause the video
         }
       });
-      const pauseDuration = Math.random() * 5000 + 2000; // Pause for 2-7 seconds
+      const pauseDuration = Math.random() * 5000 + 2000;
       await delayFunction(pauseDuration);
       console.log(`Window ${windowIndex + 1}: Replaying the video.`);
       await page.evaluate(() => {
@@ -255,31 +289,31 @@ async function trackVideoPlayback(page, windowIndex) {
     }
 
     // Randomly forward or backward the video
-    if (Math.random() < 0.1) { // 10% chance to forward/backward
-      const seekTime = Math.random() * 10; // Seek within the next 10 seconds
-      const seekDirection = Math.random() > 0.5 ? 1 : -1; // Randomly choose forward or backward
+    if (Math.random() < 0.1) {
+      const seekTime = Math.random() * 10;
+      const seekDirection = Math.random() > 0.5 ? 1 : -1;
       const newTime = Math.max(
         0,
         Math.min(currentTime + seekDirection * seekTime, totalDuration)
-      ); // Avoid negative time or exceeding total duration
+      );
       console.log(`Window ${windowIndex + 1}: Seeking to ${newTime.toFixed(2)} seconds.`);
       await page.evaluate(newTime => {
         const videoElement = document.querySelector('video');
         if (videoElement) {
-          videoElement.currentTime = newTime; // Seek to new time
+          videoElement.currentTime = newTime;
         }
       }, newTime);
     }
 
     // Randomly scroll the page (up and down)
-    if (Math.random() < 0.2) { // 20% chance to scroll during video playback
+    if (Math.random() < 0.2) {
       await scrollPage(page);
     }
 
-    // Wait for 3 seconds before updating again
-    await delayFunction(3000); // Delay 3 seconds
+    await delayFunction(3000);
   }
 }
+
 
 // Function to randomly scroll the page (up and down)
 async function scrollPage(page) {

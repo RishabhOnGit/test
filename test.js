@@ -13,7 +13,7 @@ function delayFunction(ms) {
 }
 
 // Function to navigate with retries
-async function navigateWithRetry(page, url, retries = 3, timeout = 90000) {
+async function navigateWithRetry(page, url, retries = 5, timeout = 90000) {
   for (let i = 0; i < retries; i++) {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeout });
@@ -157,13 +157,13 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     // Click on the first video
     console.log(`Window ${i + 1}: Clicking on the first video.`);
     const videoSelector = 'ytd-video-renderer #video-title';
-    await page.waitForSelector(videoSelector, { visible: true });
+    await page.waitForSelector(videoSelector, { visible: true, timeout: navigationTimeout });
     const firstVideo = await page.$(videoSelector);
     await firstVideo.click();
 
     // Wait for the video page to load
     console.log(`Window ${i + 1}: Waiting for video to load.`);
-    await page.waitForSelector('video', { visible: true });
+    await page.waitForSelector('video', { visible: true, timeout: navigationTimeout });
 
     // Wait for video playback to actually start and then track video
     console.log(`Window ${i + 1}: Waiting for video playback to start.`);

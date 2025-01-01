@@ -263,7 +263,7 @@ async function trackVideoPlayback(page, windowIndex, browser) {
     );
 
     // Kill the browser if the current time is within 6 seconds of the total duration
-    if (totalDuration > 0 && totalDuration - currentTime <= 6) {
+    if (totalDuration > 0 && totalDuration - currentTime <= 10) {
       console.log(`Window ${windowIndex + 1}: Video playback is within 6 seconds of ending. Closing the browser.`);
       await browser.close(); // Kill the browser
       return; // Exit the function

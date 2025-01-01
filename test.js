@@ -19,13 +19,12 @@ async function navigateWithRetry(page, url, retries = 5, timeout = 90000) {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeout });
       return;
     } catch (error) {
-      if (i === retries - 1) throw error; // If this is the last retry, throw the error
+      if (i === retries - 1) throw error;
       console.log(`Retrying navigation due to error: ${error.message}`);
-      await delayFunction(2000); // Wait for 2 seconds before retrying
+      await delayFunction(2000);
     }
   }
 }
-
 
 // Function to read user agents from a file
 function readUserAgentsFromFile(filePath) {
@@ -63,34 +62,33 @@ function readProxiesFromFile(filePath) {
   }
 }
 
-// Function to start browser automation
-async function startAutomation(query, windows, useProxies, proxies, userAgents, filter, channelName, headless) {
-  const filterMap = {
-    'Last hour': '&sp=EgIIAQ%253D%253D',
-    'Today': '&sp=EgIIAg%253D%253D',
-    'This week': '&sp=EgIIAw%253D%253D',
-  };
+// Function to start automation in batches
+async function startAutomationInBatches(totalWindows, batchSize, query, useProxies, proxies, userAgents, filter, channelName, headless) {
+  const totalBatches = Math.ceil(totalWindows / batchSize);
 
-  const filterParam = filterMap[filter] || '';
-  const browserPromises = [];
+  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+    console.log(`Starting batch ${batchIndex + 1} of ${totalBatches}`);
 
-  for (let i = 0; i < windows; i++) {
-    const proxy = useProxies ? proxies[i % proxies.length] : null; // Rotate proxies
-    const userAgent = userAgents[i % userAgents.length]; // Rotate user agents
-    browserPromises.push(
-      openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless)
-    );
+    const currentBatchSize = Math.min(batchSize, totalWindows - batchIndex * batchSize);
+    const browserPromises = [];
+
+    for (let i = 0; i < currentBatchSize; i++) {
+      const proxy = useProxies ? proxies[(batchIndex * batchSize + i) % proxies.length] : null;
+      const userAgent = userAgents[(batchIndex * batchSize + i) % userAgents.length];
+      browserPromises.push(
+        openWindow(batchIndex * batchSize + i, query, filter, useProxies, proxy, userAgent, channelName, headless)
+      );
+    }
+
+    await Promise.allSettled(browserPromises);
+    console.log(`Batch ${batchIndex + 1} completed. Waiting before starting the next batch.`);
+    await delayFunction(5000); // Delay before starting the next batch
   }
-
-  await Promise.allSettled(browserPromises);
 }
 
 // Function to open a single browser window and track video playback
-async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless) {
+async function openWindow(i, query, filter, useProxies, proxy, userAgent, channelName, headless) {
   try {
-    // Set the navigation timeout based on the proxy usage
-    const navigationTimeout = useProxies ? 900000 : 90000; // Timeout for navigation
-
     const browser = await puppeteer.launch({
       headless: headless,
       executablePath: '/usr/bin/chromium-browser',
@@ -102,17 +100,14 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
         '--disable-infobars',
         '--window-size=1024,600',
         '--disable-blink-features=AutomationControlled',
-        '--disable-software-rasterizer',
         ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
-      defaultViewport: { width: 1024, height: 600 }, // Set the viewport size smaller (1024x600)
-      timeout: 70000,
+      defaultViewport: { width: 1024, height: 600 },
     });
 
     const page = await browser.newPage();
     await page.setUserAgent(userAgent);
 
-    // Apply proxy authentication if needed
     if (useProxies && proxy) {
       await page.authenticate({
         username: proxy.username,
@@ -120,204 +115,62 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
       });
     }
 
-    // Set the navigation timeout for the page
-    await page.setDefaultNavigationTimeout(navigationTimeout);  // Explicitly set the default navigation timeout
-
-    // Navigate to YouTube
     console.log(`Window ${i + 1}: Navigating to YouTube homepage.`);
-    await navigateWithRetry(page, 'https://www.youtube.com', 5, 90000);  // Retry 3 times with 60 seconds timeout
-    
-    // Search for the query
+    await navigateWithRetry(page, 'https://www.youtube.com');
+
     console.log(`Window ${i + 1}: Searching for "${query}".`);
-    await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
-    await humanizedType(page, 'input[name="search_query"]', query); // Humanized typing
-    await page.click('button[aria-label="Search"]'); // Click the search button
+    await page.type('input[name="search_query"]', query);
+    await page.click('button[aria-label="Search"]');
+    await page.waitForSelector('ytd-video-renderer', { visible: true });
 
-    // Wait for search results to load
-    console.log(`Window ${i + 1}: Waiting for search results to load.`);
-    await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
-
-    // Add a delay before applying the filter
-    console.log(`Window ${i + 1}: Adding delay before applying the filter.`);
-    await delayFunction(1987);
-    await page.click('button[aria-label="Search filters"]');
-    await delayFunction(2398); // Using setTimeout for delay (5 seconds)
-
-    // Apply filter by modifying the URL
-    console.log(`Window ${i + 1}: Applying filter "${filterParam}".`);
-    const newUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}${filterParam}`;
+    console.log(`Window ${i + 1}: Applying filter "${filter}".`);
+    const newUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=${filter}`;
     await page.goto(newUrl, { waitUntil: 'domcontentloaded' });
 
-    // Wait for filtered results
-    await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
-
-    // Scroll randomly after applying the filter
-    await scrollPage(page);
-
-    // Click on the first video
     console.log(`Window ${i + 1}: Clicking on the first video.`);
     const videoSelector = 'ytd-video-renderer #video-title';
-    await page.waitForSelector(videoSelector, { visible: true, timeout: navigationTimeout });
     const firstVideo = await page.$(videoSelector);
     await firstVideo.click();
 
-    // Wait for the video page to load
-    console.log(`Window ${i + 1}: Waiting for video to load.`);
-    await page.waitForSelector('video', { visible: true, timeout: navigationTimeout });
+    console.log(`Window ${i + 1}: Waiting for video playback to finish.`);
+    await trackVideoPlayback(page);
 
-    // Wait for video playback to actually start and then track video
-    console.log(`Window ${i + 1}: Waiting for video playback to start.`);
-    await trackVideoPlayback(page, i); // Track video playback time
-
-    // Close the browser after playback
     console.log(`Window ${i + 1}: Closing the browser.`);
     await browser.close();
   } catch (error) {
     console.error(`Window ${i + 1} encountered an error: ${error.message}`);
   }
 }
-// Function to track video playback and update both current time and total duration every 3 seconds
-async function trackVideoPlayback(page, windowIndex) {
-  let currentTime = 0;
-  let totalDuration = 0;  // Variable to store total video duration
 
-  // Wait for video to start playing and get the total duration
-  let videoStarted = false;
-  while (!videoStarted) {
-    const videoData = await page.evaluate(() => {
-      const videoElement = document.querySelector('video');
-      if (videoElement && videoElement.duration > 0) {
-        return {
-          currentTime: videoElement.currentTime,
-          totalDuration: videoElement.duration,
-        };
-      }
-      return { currentTime: 0, totalDuration: 0 }; // Return defaults if video isn't ready
-    });
-
-    currentTime = videoData.currentTime;
-    totalDuration = videoData.totalDuration;
-
-    if (currentTime > 0) {
-      videoStarted = true; // Video has started playing
-    } else {
-      await delayFunction(2000); // Wait for 2 seconds before checking again
-    }
-  }
-
-  // Loop to fetch both current time and total duration every 3 seconds
+// Function to track video playback and close the browser when done
+async function trackVideoPlayback(page) {
   while (true) {
-    const videoData = await page.evaluate(() => {
-      const videoElement = document.querySelector('video');
-      if (videoElement) {
-        return {
-          currentTime: videoElement.currentTime || 0,
-          totalDuration: videoElement.duration || 0,
-        };
+    const { currentTime, totalDuration } = await page.evaluate(() => {
+      const video = document.querySelector('video');
+      if (video) {
+        return { currentTime: video.currentTime, totalDuration: video.duration };
       }
-      return { currentTime: 0, totalDuration: 0 }; // Default if video element is not found
+      return { currentTime: 0, totalDuration: 0 };
     });
 
-    currentTime = videoData.currentTime || 0;
-    totalDuration = videoData.totalDuration || 0;
-
-    // Print current time and total duration in the format {currentTime}/{totalDuration}
-    console.log(
-      `Window ${windowIndex + 1}: ${currentTime.toFixed(2)} / ${totalDuration.toFixed(2)} seconds`
-    );
-
-    // Randomly pause and replay the video
-    if (Math.random() < 0.15) { // 15% chance to pause/replay
-      console.log(`Window ${windowIndex + 1}: Pausing the video.`);
-      await page.evaluate(() => {
-        const videoElement = document.querySelector('video');
-        if (videoElement) {
-          videoElement.pause(); // Pause the video
-        }
-      });
-      const pauseDuration = Math.random() * 5000 + 2000; // Pause for 2-7 seconds
-      await delayFunction(pauseDuration);
-      console.log(`Window ${windowIndex + 1}: Replaying the video.`);
-      await page.evaluate(() => {
-        const videoElement = document.querySelector('video');
-        if (videoElement) {
-          videoElement.play(); // Resume playback
-        }
-      });
+    if (currentTime >= totalDuration) {
+      console.log('Video playback completed.');
+      break;
     }
 
-    // Randomly forward or backward the video
-    if (Math.random() < 0.1) { // 10% chance to forward/backward
-      const seekTime = Math.random() * 10; // Seek within the next 10 seconds
-      const seekDirection = Math.random() > 0.5 ? 1 : -1; // Randomly choose forward or backward
-      const newTime = Math.max(
-        0,
-        Math.min(currentTime + seekDirection * seekTime, totalDuration)
-      ); // Avoid negative time or exceeding total duration
-      console.log(`Window ${windowIndex + 1}: Seeking to ${newTime.toFixed(2)} seconds.`);
-      await page.evaluate(newTime => {
-        const videoElement = document.querySelector('video');
-        if (videoElement) {
-          videoElement.currentTime = newTime; // Seek to new time
-        }
-      }, newTime);
-    }
-
-    // Randomly scroll the page (up and down)
-    if (Math.random() < 0.2) { // 20% chance to scroll during video playback
-      await scrollPage(page);
-    }
-
-    // Wait for 3 seconds before updating again
-    await delayFunction(3000); // Delay 3 seconds
+    await delayFunction(3000); // Check playback progress every 3 seconds
   }
 }
-
-// Function to randomly scroll the page (up and down)
-async function scrollPage(page) {
-  console.log('Scrolling randomly.');
-
-  // Wait for the page to load enough content (using delayFunction for timeout)
-  await delayFunction(3000); // 3 seconds delay to wait for the page content
-
-  // Get the scroll height of the page
-  const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
-
-  // Randomly scroll down
-  const randomScrollDown = Math.floor(Math.random() * (scrollHeight / 2)) + 100; // Random scroll down position (between 100 and half the scroll height)
-  console.log(`Scrolling down by ${randomScrollDown}px`);
-  await page.evaluate(scrollPos => window.scrollTo(0, scrollPos), randomScrollDown);
-
-  // Wait for a moment before scrolling back to the top
-  await delayFunction(3897); // 4 seconds delay after scrolling down
-
-  // Force scroll to the top
-  console.log('Forcing scroll to the top');
-  await page.evaluate(() => window.scrollTo(0, 0));
-
-  // Wait for a moment before finishing
-  await delayFunction(3786); // 4 seconds delay after scrolling to the top
-}
-
-// Humanized typing delay (Random delay between 50ms and 90ms per character)
-async function humanizedType(page, selector, text) {
-  const inputField = await page.$(selector);
-  for (let i = 0; i < text.length; i++) {
-    await inputField.type(text.charAt(i));
-    const delay = Math.floor(Math.random() * (100 - 50 + 1)) + 50; // Random delay between 50ms and 90ms
-    await delayFunction(delay);
-  }
-}
-
 
 // Main function to gather user input
 (async () => {
   const prompt = inquirer.createPromptModule();
 
-  const answers = await prompt([  
+  const answers = await prompt([
     { type: 'input', name: 'query', message: 'Enter the YouTube search query (video title or keywords):' },
     { type: 'input', name: 'channelName', message: 'Enter the channel name you want to match (leave blank to skip):', default: '' },
     { type: 'number', name: 'windows', message: 'Enter the number of browser windows to open:', default: 1 },
+    { type: 'number', name: 'batchSize', message: 'Enter the batch size:', default: 10 },
     { type: 'confirm', name: 'useProxies', message: 'Do you want to use proxies?', default: true },
     { type: 'input', name: 'proxyFilePath', message: 'Enter the path of the proxy file:', default: path.join(__dirname, 'proxies.txt'), when: answers => answers.useProxies },
     { type: 'input', name: 'userAgentFilePath', message: 'Enter the path of the user agent file:', default: path.join(__dirname, 'useragent.txt') },
@@ -325,16 +178,13 @@ async function humanizedType(page, selector, text) {
     { type: 'confirm', name: 'headless', message: 'Do you want to use headless mode? (No UI)', default: true },
   ]);
 
-  let proxies = [];
-  if (answers.useProxies && answers.proxyFilePath) {
-    proxies = readProxiesFromFile(answers.proxyFilePath);
-  }
-
+  const proxies = answers.useProxies ? readProxiesFromFile(answers.proxyFilePath) : [];
   const userAgents = readUserAgentsFromFile(answers.userAgentFilePath);
 
-  await startAutomation(
-    answers.query,
+  await startAutomationInBatches(
     answers.windows,
+    answers.batchSize,
+    answers.query,
     answers.useProxies,
     proxies,
     userAgents,

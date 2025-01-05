@@ -3,6 +3,10 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const inquirer = require('inquirer');
 const fs = require('fs');
 const path = require('path');
+const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker');
+const readline = require('readline');
+puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
+
 
 // Use the stealth plugin to bypass bot detection
 puppeteer.use(StealthPlugin());
@@ -23,6 +27,54 @@ async function navigateWithRetry(page, url, retries = 5, timeout = 90000) {
       console.log(`Retrying navigation due to error: ${error.message}`);
       await delayFunction(2000); // Wait for 2 seconds before retrying
     }
+  }
+}
+
+
+async function waitForAdToFinish(page, timeout = 30000) {
+  console.log("Waiting for sponsored ad to finish...");
+
+  const startTime = Date.now();
+
+  while (true) {
+    const isSponsoredAdVisible = await page.evaluate(() => {
+      const sponsoredBadge = document.querySelector(
+        '.ad-simple-attributed-string.ytp-ad-badge__text--clean-player'
+      );
+      return sponsoredBadge && sponsoredBadge.style.display !== 'none';
+    });
+
+    if (!isSponsoredAdVisible) {
+      console.log("Sponsored ad not found. Moving to the next task...");
+      break;
+    }
+
+    console.log("Sponsored ad is still visible. Checking again...");
+    await delayFunction(3000); // Wait for 3 seconds before checking again
+
+    if (Date.now() - startTime > timeout) {
+      console.log("Sponsored ad timeout reached. Moving to the next task...");
+      break;
+    }
+  }
+}
+
+
+function loadCookiesForWindow(windowIndex) {
+  const cookiesPath = path.join(__dirname, 'cookies', `profile${windowIndex + 1}_cookies.json`);
+  if (fs.existsSync(cookiesPath)) {
+    const cookies = JSON.parse(fs.readFileSync(cookiesPath));
+    console.log(`Window ${windowIndex + 1}: Loaded cookies from ${cookiesPath}`);
+    return cookies;
+  }
+  console.log(`Window ${windowIndex + 1}: No cookies found at ${cookiesPath}`);
+  return [];
+}
+
+async function injectCookies(page, cookies) {
+  if (cookies.length > 0) {
+    await page.setCookie(...cookies); // Inject cookies into the page
+    console.log('Cookies injected for login.');
   }
 }
 
@@ -75,8 +127,81 @@ async function safelyCloseBrowser(browser, windowIndex) {
   }
 }
 
+
+
+async function subscribeToChannelDuringPlayback(page, totalDuration) {
+  const subscribeButtonSelector = 'ytd-subscribe-button-renderer button';
+  const triggerTime = totalDuration / 3; // Trigger at or after 1/3 of the total duration
+  console.log(`Scheduled to subscribe at or after ${triggerTime.toFixed(2)} seconds.`);
+
+  while (true) {
+    const currentTime = await page.evaluate(() => {
+      const video = document.querySelector('video');
+      return video ? video.currentTime : 0;
+    });
+
+    if (currentTime >= triggerTime) {
+      const subscribeButton = await page.$(subscribeButtonSelector);
+      if (subscribeButton) {
+        const isSubscribed = await page.evaluate(
+          (btn) => (btn.textContent || '').toLowerCase().includes('subscribed'),
+          subscribeButton
+        );
+        if (!isSubscribed) {
+          console.log('Subscribing to the channel...');
+          await subscribeButton.click();
+          console.log('Successfully subscribed.');
+        } else {
+          console.log('Already subscribed.');
+        }
+      } else {
+        console.log('Subscribe button not found.');
+      }
+      break;
+    }
+
+    console.log(`Current time: ${currentTime.toFixed(2)} seconds. Waiting to subscribe.`);
+    await delayFunction(3000);
+  }
+}
+
+
+async function randomlyLikeVideo(page, totalDuration) {
+  const likeButtonSelector = 'button[aria-label*="like this video"]'; // Updated selector
+  const triggerTime = totalDuration / 4; // Trigger at or after 1/4 of the total duration
+  console.log(`Scheduled to like video at or after ${triggerTime.toFixed(2)} seconds.`);
+
+  while (true) {
+    const currentTime = await page.evaluate(() => {
+      const video = document.querySelector('video');
+      return video ? video.currentTime : 0;
+    });
+
+    if (currentTime >= triggerTime) {
+      const likeButton = await page.$(likeButtonSelector);
+      if (likeButton) {
+        const isLiked = await page.evaluate((btn) => btn.getAttribute('aria-pressed') === 'true', likeButton);
+        if (!isLiked) {
+          console.log('Liking the video...');
+          await likeButton.click();
+          console.log('Video liked successfully.');
+        } else {
+          console.log('Video is already liked.');
+        }
+      } else {
+        console.log('Like button not found.');
+      }
+      break;
+    }
+
+    console.log(`Current time: ${currentTime.toFixed(2)} seconds. Waiting to like.`);
+    await delayFunction(3000);
+  }
+}
+
+
 // Function to start browser automation with batching
-async function startAutomation(query, windows, useProxies, proxies, userAgents, filter, channelName, headless) {
+async function startAutomation(query, windows, useProxies, proxies, userAgents, filter, channelName, headless, likeVideo, subscribeChannel) {
   const filterMap = {
     'Last hour': '&sp=EgIIAQ%253D%253D',
     'Today': '&sp=EgIIAg%253D%253D',
@@ -97,8 +222,9 @@ async function startAutomation(query, windows, useProxies, proxies, userAgents, 
     for (let i = startWindow; i < endWindow; i++) {
       const proxy = useProxies ? proxies[i % proxies.length] : null; // Rotate proxies
       const userAgent = userAgents[i % userAgents.length]; // Rotate user agents
+    
       browserPromises.push(
-        openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless)
+        openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless, likeVideo, subscribeChannel)
       );
     }
 
@@ -108,14 +234,13 @@ async function startAutomation(query, windows, useProxies, proxies, userAgents, 
 }
 
 // Function to open a single browser window and track video playback
-async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, channelName, headless) {
-  let browser = null; // Declare browser here for cleanup
+async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, headless) {
   try {
+
     const navigationTimeout = useProxies ? 900000 : 90000; // Timeout for navigation
 
     browser = await puppeteer.launch({
       headless: headless,
-      executablePath: '/usr/bin/chromium-browser',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -132,6 +257,8 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     });
 
     const page = await browser.newPage();
+    const cookies = loadCookiesForWindow(i); // Load cookies for this window
+    await injectCookies(page, cookies); // Inject the cookies
     await page.setUserAgent(userAgent);
 
     if (useProxies && proxy) {
@@ -149,6 +276,27 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
     await humanizedType(page, 'input[name="search_query"]', query);
     await page.click('button[aria-label="Search"]');
+
+    // Inject JavaScript to hide ad elements
+  await page.evaluate(() => {
+    // Hide the video ad overlay
+    const adOverlay = document.querySelector('.ytp-ad-overlay-container');
+    if (adOverlay) {
+      adOverlay.style.display = 'none';
+    }
+
+    // Hide banner ads (if any)
+    const bannerAd = document.querySelector('.ytp-ad-banner');
+    if (bannerAd) {
+      bannerAd.style.display = 'none';
+    }
+
+    // Hide the pre-roll video ad
+    const videoAd = document.querySelector('.video-ads');
+    if (videoAd) {
+      videoAd.style.display = 'none';
+    }
+  });
 
     console.log(`Window ${i + 1}: Waiting for search results to load.`);
     await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
@@ -173,10 +321,12 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 
     console.log(`Window ${i + 1}: Waiting for video to load.`);
     await page.waitForSelector('video', { visible: true, timeout: navigationTimeout });
-    console.log(`Window ${i + 1}: Waiting for video playback to start.`);
-    await trackVideoPlayback(page, i);
 
-    console.log(`Window ${i + 1}: Closing the browser.`);
+    await waitForAdToFinish(page, 30000);
+
+    await trackVideoPlayback(page, i, browser);
+
+
   } catch (error) {
     console.error(`Window ${i + 1} encountered an error: ${error.message}`);
   } finally {
@@ -185,133 +335,114 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 }
 
 async function trackVideoPlayback(page, windowIndex, browser) {
-  const playbackTimeout = 20000; // Timeout for playback to start (45 seconds)
+  const playbackTimeout = 20000; // Timeout for playback to start
   let currentTime = 0;
   let totalDuration = 0;
   let playbackStarted = false;
 
-  const maxRetries = 3; // Maximum number of retries for refreshing the page
+  console.log(`Window ${windowIndex + 1}: Waiting for video playback to start...`);
+
+  // Attempt to start video playback
+  const maxRetries = 3;
   let retryCount = 0;
 
   while (!playbackStarted && retryCount < maxRetries) {
-    const startPlaybackTime = Date.now(); // Start time for the timeout check
+    const videoData = await page.evaluate(() => {
+      const videoElement = document.querySelector('video');
+      return videoElement
+        ? { currentTime: videoElement.currentTime, totalDuration: videoElement.duration }
+        : null;
+    });
 
-    while (!playbackStarted) {
-      const videoData = await page.evaluate(() => {
-        const videoElement = document.querySelector('video');
-        if (videoElement && videoElement.duration > 0) {
-          return {
-            currentTime: videoElement.currentTime,
-            totalDuration: videoElement.duration,
-          };
-        }
-        return { currentTime: 0, totalDuration: 0 }; // Default values if video isn't ready
-      });
-
-      currentTime = videoData.currentTime;
+    if (videoData && videoData.totalDuration > 0) {
       totalDuration = videoData.totalDuration;
-
-      if (currentTime > 0) {
-        playbackStarted = true; // Video has started playing
-        console.log(`Window ${windowIndex + 1}: Video playback started.`);
-        break;
-      }
-
-      if (Date.now() - startPlaybackTime > playbackTimeout) {
+      playbackStarted = true;
+      console.log(
+        `Window ${windowIndex + 1}: Video playback started. Total duration: ${totalDuration.toFixed(
+          2
+        )} seconds.`
+      );
+    } else {
+      retryCount++;
+      if (retryCount < maxRetries) {
         console.log(
-          `Window ${windowIndex + 1}: Video did not start within 45 seconds. Refreshing the page (Attempt ${retryCount + 1}/${maxRetries}).`
+          `Window ${windowIndex + 1}: Retrying video playback (${retryCount}/${maxRetries})...`
         );
-        retryCount++;
-        if (retryCount < maxRetries) {
-          await page.reload({ waitUntil: 'domcontentloaded' }); // Refresh the page
-          await page.waitForSelector('video', { visible: true, timeout: 30000 }); // Wait for video to load
-        } else {
-          console.error(`Window ${windowIndex + 1}: Maximum retries reached. Video playback failed.`);
-          return; // Exit after maximum retries
-        }
-        break; // Exit the inner loop and retry playback tracking
+        await delayFunction(5000); // Retry after 5 seconds
+      } else {
+        console.error(`Window ${windowIndex + 1}: Failed to start video playback.`);
+        return;
       }
-
-      await delayFunction(2000); // Wait for 2 seconds before checking again
     }
   }
 
-  // If playback did not start, exit
   if (!playbackStarted) {
-    console.error(`Window ${windowIndex + 1}: Failed to start video playback.`);
+    console.error(`Window ${windowIndex + 1}: Playback could not start. Exiting...`);
     return;
   }
 
-  // Continue playback tracking if the video has started
+  // Step 1: Execute like task
+  console.log(`Window ${windowIndex + 1}: Triggering like task...`);
+  await randomlyLikeVideo(page, totalDuration);
+
+  // Step 2: Execute subscribe task
+  console.log(`Window ${windowIndex + 1}: Triggering subscribe task...`);
+  await subscribeToChannelDuringPlayback(page, totalDuration);
+
+
+  // Step 4: Monitor video playback and randomly pause/seek
   while (true) {
     const videoData = await page.evaluate(() => {
       const videoElement = document.querySelector('video');
-      if (videoElement) {
-        return {
-          currentTime: videoElement.currentTime || 0,
-          totalDuration: videoElement.duration || 0,
-        };
-      }
-      return { currentTime: 0, totalDuration: 0 }; // Default if video element is not found
+      return videoElement
+        ? { currentTime: videoElement.currentTime || 0, totalDuration: videoElement.duration || 0 }
+        : { currentTime: 0, totalDuration: 0 };
     });
 
-    currentTime = videoData.currentTime || 0;
-    totalDuration = videoData.totalDuration || 0;
+    currentTime = videoData.currentTime;
+    totalDuration = videoData.totalDuration;
 
     console.log(
       `Window ${windowIndex + 1}: ${currentTime.toFixed(2)} / ${totalDuration.toFixed(2)} seconds`
     );
 
-    // Kill the browser if the current time is within 6 seconds of the total duration
+    // End monitoring if the video is within 10 seconds of completion
     if (totalDuration > 0 && totalDuration - currentTime <= 10) {
-      console.log(`Window ${windowIndex + 1}: Video playback is within 6 seconds of ending. Closing the browser.`);
-      await browser.close(); // Kill the browser
-      return; // Exit the function
+      console.log(
+        `Window ${windowIndex + 1}: Video playback is within 10 seconds of ending. Closing the browser.`
+      );
+      await browser.close();
+      break;
     }
 
-    // Randomly pause and replay the video
-    if (Math.random() < 0.15) {
+    // Randomly pause and resume playback
+    if (Math.random() < 0.15) { // 15% chance to pause
       console.log(`Window ${windowIndex + 1}: Pausing the video.`);
       await page.evaluate(() => {
         const videoElement = document.querySelector('video');
-        if (videoElement) {
-          videoElement.pause(); // Pause the video
-        }
+        if (videoElement) videoElement.pause();
       });
-      const pauseDuration = Math.random() * 5000 + 2000;
-      await delayFunction(pauseDuration);
-      console.log(`Window ${windowIndex + 1}: Replaying the video.`);
+      await delayFunction(Math.random() * 5000 + 2000); // Pause for 2-7 seconds
+      console.log(`Window ${windowIndex + 1}: Resuming the video.`);
       await page.evaluate(() => {
         const videoElement = document.querySelector('video');
-        if (videoElement) {
-          videoElement.play(); // Resume playback
-        }
+        if (videoElement) videoElement.play();
       });
     }
 
-    // Randomly forward or backward the video
-    if (Math.random() < 0.1) {
-      const seekTime = Math.random() * 10;
-      const seekDirection = Math.random() > 0.5 ? 1 : -1;
-      const newTime = Math.max(
-        0,
-        Math.min(currentTime + seekDirection * seekTime, totalDuration)
-      );
+    // Randomly seek forward or backward
+    if (Math.random() < 0.1) { // 10% chance to seek
+      const seekTime = Math.random() * 10; // Random seek duration (0-10 seconds)
+      const seekDirection = Math.random() > 0.5 ? 1 : -1; // Randomly decide forward or backward
+      const newTime = Math.max(0, Math.min(currentTime + seekDirection * seekTime, totalDuration));
       console.log(`Window ${windowIndex + 1}: Seeking to ${newTime.toFixed(2)} seconds.`);
       await page.evaluate(newTime => {
         const videoElement = document.querySelector('video');
-        if (videoElement) {
-          videoElement.currentTime = newTime;
-        }
+        if (videoElement) videoElement.currentTime = newTime;
       }, newTime);
     }
 
-    // Randomly scroll the page (up and down)
-    if (Math.random() < 0.2) {
-      await scrollPage(page);
-    }
-
-    await delayFunction(3000);
+    await delayFunction(3000); // Check playback every 3 seconds
   }
 }
 
@@ -353,14 +484,16 @@ async function humanizedType(page, selector, text) {
 }
 
 
-// Main function to gather user input
+// Main function to gather user inpu
+
 (async () => {
   const prompt = inquirer.createPromptModule();
 
   const answers = await prompt([  
     { type: 'input', name: 'query', message: 'Enter the YouTube search query (video title or keywords):' },
-    { type: 'input', name: 'channelName', message: 'Enter the channel name you want to match (leave blank to skip):', default: '' },
     { type: 'number', name: 'windows', message: 'Enter the number of browser windows to open:', default: 1 },
+    { type: 'confirm', name: 'likeVideo', message: 'Do you want to like the video?', default: false },
+    { type: 'confirm', name: 'subscribeChannel', message: 'Do you want to subscribe to the channel?', default: false },
     { type: 'confirm', name: 'useProxies', message: 'Do you want to use proxies?', default: true },
     { type: 'input', name: 'proxyFilePath', message: 'Enter the path of the proxy file:', default: path.join(__dirname, 'proxies.txt'), when: answers => answers.useProxies },
     { type: 'input', name: 'userAgentFilePath', message: 'Enter the path of the user agent file:', default: path.join(__dirname, 'useragent.txt') },
@@ -383,6 +516,19 @@ async function humanizedType(page, selector, text) {
     userAgents,
     answers.filter,
     answers.channelName,
-    answers.headless
-  );
+    answers.headless,
+    answers.likeVideo,
+    answers.subscribeChannel,
+  );  
 })();
+process.on('exit', (code) => {
+  console.log(`Process exited with code: ${code}`);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection:', reason);
+});
+
+process.on('beforeExit', (code) => {
+  console.log(`Node.js is about to exit with code: ${code}`);
+});

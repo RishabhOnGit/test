@@ -222,7 +222,7 @@ async function startAutomation(query, windows, useProxies, proxies, userAgents, 
   };
 
   const filterParam = filterMap[filter] || '';
-  const batchSize = 1; // Number of browser windows to open in parallel
+  const batchSize = 100; // Number of browser windows to open in parallel
   const totalBatches = Math.ceil(windows / batchSize);
 
   for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {

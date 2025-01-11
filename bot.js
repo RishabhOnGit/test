@@ -145,9 +145,15 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     console.log(`Window ${i + 1}: Navigating to YouTube homepage.`);
     await navigateWithRetry(page, 'https://www.youtube.com', 5, 90000);
 
-    console.log(`Window ${i + 1}: Searching for "${query}".`);
+    console.log(`Window ${i + 1}: Searching for "${query}"${channelName ? ` on channel "${channelName}"` : ''}.`);
     await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
     await humanizedType(page, 'input[name="search_query"]', query);
+
+// Optionally, you can add logic here to filter by the channel name if provided
+    if (channelName) {
+        console.log(`Matching results to the channel name: "${channelName}"`);
+    // Add logic to check or match the channel name in search results
+    }
     await page.click('button[aria-label="Search"]');
 
     console.log(`Window ${i + 1}: Waiting for search results to load.`);

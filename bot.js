@@ -115,7 +115,6 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
 
     browser = await puppeteer.launch({
       headless: headless,
-      executablePath: '/usr/bin/chromium-browser',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -145,16 +144,10 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, c
     console.log(`Window ${i + 1}: Navigating to YouTube homepage.`);
     await navigateWithRetry(page, 'https://www.youtube.com', 5, 90000);
 
-    console.log(`Window ${i + 1}: Searching for "${query}"${channelName ? ` on channel "${channelName}"` : ''}.`);
+    console.log(`Window ${i + 1}: Searching for "${query}"${channelName ? ` and channel "${channelName}"` : ''}.`);
     await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
-    await humanizedType(page, 'input[name="search_query"]', query);
-
-// Optionally, you can add logic here to filter by the channel name if provided
-    if (channelName) {
-        console.log(`Matching results to the channel name: "${channelName}"`);
-    // Add logic to check or match the channel name in search results
-    }
-    await page.click('button[aria-label="Search"]');
+    await humanizedType(page, 'input[name="search_query"]', `${query} ${channelName}`.trim());
+    await page.click('button[aria-label="Search"]'); // Click the search button to perform the search
 
     console.log(`Window ${i + 1}: Waiting for search results to load.`);
     await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });

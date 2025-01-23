@@ -293,7 +293,7 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent,ch
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-accelerated-2d-canvas',
-        '--disable-gpu',
+       // '--disable-gpu',
         '--disable-infobars',
         '--window-size=1024,600',
         '--disable-blink-features=AutomationControlled',

@@ -31,6 +31,40 @@ async function navigateWithRetry(page, url, retries = 5, timeout = 90000) {
   }
 }
 
+
+async function findAndClickVideoByChannel(page, channelName, maxScrollAttempts = 5) {
+  let attempts = 0;
+  while (attempts < maxScrollAttempts) {
+    // Grab all ytd-video-renderer elements
+    const videoHandles = await page.$$('ytd-video-renderer');
+    
+    for (const video of videoHandles) {
+      const channelEl = await video.$('ytd-channel-name');
+      if (!channelEl) continue;  // Skip if missing channel section
+
+      const channelText = await channelEl.evaluate(el => el.textContent.trim());
+      if (channelText.toLowerCase().includes(channelName.toLowerCase())) {
+        // Found a match
+        const titleEl = await video.$('#video-title');
+        if (titleEl) {
+          console.log(`Found channel match: "${channelText}" -> clicking video`);
+          await titleEl.click();
+          return true; // success
+        }
+      }
+    }
+
+    console.log(`Channel "${channelName}" not found yet, scrolling further...`);
+    // Scroll down ~800px
+    await page.evaluate(() => {
+      window.scrollBy(0, 800);
+    });
+    await delayFunction(1500);
+    attempts++;
+  }
+  return false; // Not found after maxScrollAttempts
+}
+
 // Wait for ad to finish (skip logs about each check)
 async function waitForAdToFinish(page, timeout = 30000) {
   const startTime = Date.now();
@@ -247,14 +281,13 @@ async function startAutomation(query, windows, useProxies, proxies, userAgents, 
 }
 
 // Function to open a single browser window and track video playback
-async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, likeVideo,subscribeChannel,headless) {
+async function openWindow(i, query, filterParam, useProxies, proxy, userAgent,channelName, likeVideo,subscribeChannel,headless) {
   try {
 
     const navigationTimeout = useProxies ? 900000 : 90000; // Timeout for navigation
 
     browser = await puppeteer.launch({
       headless: headless,
-      executablePath: '/usr/bin/chromium-browser',
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -325,12 +358,27 @@ async function openWindow(i, query, filterParam, useProxies, proxy, userAgent, l
     await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
     await delayFunction(1324);
 
-    console.log(`Window ${i + 1}: Clicking on the first video.`);
-    const videoSelector = 'ytd-video-renderer #video-title';
-    await page.waitForSelector(videoSelector, { visible: true, timeout: navigationTimeout });
-    const firstVideo = await page.$(videoSelector);
-    await firstVideo.click();
+    // After you've applied the filter (or not), we scroll the page if needed, then:
 
+    if (channelName) {
+      console.log(`Window ${i + 1}: Searching for channel "${channelName}"...`);
+      const found = await findAndClickVideoByChannel(page, channelName);
+      if (!found) {
+        console.error(`Window ${i + 1}: Could not find any video from channel "${channelName}".`);
+        return; // Stop this window if channel video not found
+      }
+    } else {
+  // User did NOT provide a channel name, so click the first video
+      console.log(`Window ${i + 1}: Channel name is empty -> clicking first video.`);
+      const videoSelector = 'ytd-video-renderer #video-title';
+      await page.waitForSelector(videoSelector, { visible: true, timeout: navigationTimeout });
+      const firstVideo = await page.$(videoSelector);
+      if (!firstVideo) {
+        console.error(`Window ${i + 1}: No videos found. Exiting.`);
+        return;
+      }
+      await firstVideo.click();
+    }
     console.log(`Window ${i + 1}: Waiting for video to load.`);
     await page.waitForSelector('video', { visible: true, timeout: navigationTimeout });
 
@@ -489,6 +537,7 @@ async function humanizedType(page, selector, text) {
 
   const answers = await prompt([  
     { type: 'input', name: 'query', message: 'Enter the YouTube search query (video title or keywords):' },
+    { type: 'input', name: 'channelName', message: 'Enter the channel name you want to match (leave blank to skip):'},
     { type: 'number', name: 'windows', message: 'Enter the number of browser windows to open:', default: 1 },
     { type: 'confirm', name: 'likeVideo', message: 'Do you want to like the video?', default: false },
     { type: 'confirm', name: 'subscribeChannel', message: 'Do you want to subscribe to the channel?', default: false },

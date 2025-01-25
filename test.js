@@ -209,17 +209,22 @@ async function randomlyLikeVideo(page, totalDuration) {
 // Force 144p
 async function forceQuality144p(page) {
   try {
-    await page.waitForSelector('.ytp-settings-button', { visible: true });
+    console.log('Waiting for settings button...');
+    // Wait for the settings button and click it (70 seconds timeout)
+    await page.waitForSelector('.ytp-settings-button', { visible: true, timeout: 70000 });
     await page.click('.ytp-settings-button');
-    await delayFunction(500);
+    console.log('Settings button clicked.');
 
+    // Wait for the settings menu to appear and scroll to the bottom
+    await page.waitForSelector('.ytp-settings-menu', { visible: true, timeout: 70000 });
     await page.evaluate(() => {
-      const menu = document.querySelector('.ytp-settings-menu') 
-                || document.querySelector('.ytp-panel-menu');
+      const menu = document.querySelector('.ytp-settings-menu') || document.querySelector('.ytp-panel-menu');
       if (menu) menu.scrollTop = menu.scrollHeight;
     });
     await delayFunction(500);
 
+    // Find and click the "Quality" menu item
+    console.log('Looking for "Quality" menu item...');
     await page.evaluate(() => {
       const items = [...document.querySelectorAll('.ytp-menuitem')];
       const qualityItem = items.find(item => item.textContent.includes('Quality'));
@@ -227,19 +232,33 @@ async function forceQuality144p(page) {
     });
     await delayFunction(500);
 
+    // Scroll to the bottom of the quality menu
+    console.log('Scrolling to "144p" option...');
     await page.evaluate(() => {
-      const menu = document.querySelector('.ytp-settings-menu') 
-                || document.querySelector('.ytp-panel-menu');
+      const menu = document.querySelector('.ytp-settings-menu') || document.querySelector('.ytp-panel-menu');
       if (menu) menu.scrollTop = menu.scrollHeight;
     });
     await delayFunction(500);
 
-    await page.evaluate(() => {
+    // Select the "144p" resolution
+    console.log('Selecting "144p" resolution...');
+    const resolutionSet = await page.evaluate(() => {
       const items = [...document.querySelectorAll('.ytp-menuitem')];
       const resItem = items.find(item => item.textContent.includes('144p'));
-      if (resItem) resItem.click();
+      if (resItem) {
+        resItem.click();
+        return true; // Successfully clicked
+      }
+      return false; // Failed to find "144p"
     });
+
+    if (!resolutionSet) {
+      console.error('Error: "144p" resolution not found in the menu.');
+    } else {
+      console.log('Resolution set to "144p".');
+    }
     await delayFunction(500);
+
   } catch (err) {
     console.error('Error forcing 144p:', err.message);
   }

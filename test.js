@@ -358,7 +358,7 @@ async function openWindow(
 
     console.log(`Window ${i + 1}: Navigating to YouTube homepage.`);
     await navigateWithRetry(page, 'https://www.youtube.com', 5, 90000);
-    await page.reload({ waitUntil: 'networkidle2', timeout: 90000 });
+    // await page.reload({ waitUntil: 'networkidle2', timeout: 90000 });
 
     await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
     await humanizedType(page, 'input[name="search_query"]', query);

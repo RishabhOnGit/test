@@ -327,7 +327,7 @@ async function openWindow(
     const navigationTimeout = 120000;
 
     browser = await puppeteer.launch({
-      headless: headless,
+      headless: true,
       executablePath: '/usr/bin/chromium-browser',
       args: [
         '--no-sandbox',
@@ -664,12 +664,6 @@ async function humanizedType(page, selector, text) {
       default: 'none'
     },
     {
-      type: 'confirm',
-      name: 'headless',
-      message: 'Do you want to use headless mode? (No UI)',
-      default: true
-    },
-    {
       type: 'number',
       name: 'videoPlaySeconds',
       message: 'How many seconds should each video play before closing?',
@@ -700,7 +694,6 @@ async function humanizedType(page, selector, text) {
     proxies,
     userAgents,
     answers.filter,
-    answers.headless,
     answers.videoPlaySeconds // Pass the new field
   );
 })();

@@ -17,7 +17,7 @@ function delayFunction(ms) {
 }
 
 // Navigate with retries
-async function navigateWithRetry(page, url, retries = 5, timeout = 90000) {
+async function navigateWithRetry(page, url, retries = 5, timeout = 120000) {
   for (let i = 0; i < retries; i++) {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeout });
@@ -208,13 +208,13 @@ async function randomlyLikeVideo(page, totalDuration) {
 // Force 144p
 async function forceQuality144p(page) {
   try {
+    await delayFunction(1000);
     // Wait for the settings button and click it (70 seconds timeout)
-    await delayFunction(3000);
-    await page.waitForSelector('.ytp-settings-button', { visible: true, timeout: 90000 });
+    await page.waitForSelector('.ytp-settings-button', { visible: true, timeout: 120000 });
     await page.click('.ytp-settings-button');
 
     // Wait for the settings menu to appear and scroll to the bottom
-    await page.waitForSelector('.ytp-settings-menu', { visible: true, timeout: 90000 });
+    await page.waitForSelector('.ytp-settings-menu', { visible: true, timeout: 120000 });
     await page.evaluate(() => {
       const menu = document.querySelector('.ytp-settings-menu') || document.querySelector('.ytp-panel-menu');
       if (menu) menu.scrollTop = menu.scrollHeight;
@@ -259,7 +259,6 @@ async function forceQuality144p(page) {
   }
 }
 
-// *** NEW ***
 // A wrapper function to retry opening a single window if any error occurs.
 async function openWindowWithRetry(
   i,
@@ -272,6 +271,7 @@ async function openWindowWithRetry(
   userAgent,
   filterParam,
   headless,
+  videoPlaySeconds, // pass video play duration
   retries = 5
 ) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -286,7 +286,8 @@ async function openWindowWithRetry(
         proxy,
         userAgent,
         filterParam,
-        headless
+        headless,
+        videoPlaySeconds
       );
       // If successful, break out of the retry loop
       console.log(`Window ${i+1}: Succeeded on attempt ${attempt}`);
@@ -297,7 +298,7 @@ async function openWindowWithRetry(
       if (attempt < retries) {
         // Wait before retrying
         console.log(`Window ${i+1}: Retrying in 3 seconds...`);
-        await delayFunction(4000);
+        await delayFunction(3000);
       } else {
         console.error(`Window ${i+1}: All ${retries} attempts failed. Skipping...`);
       }
@@ -305,7 +306,6 @@ async function openWindowWithRetry(
   }
 }
 
-// *** IMPORTANT ***
 // Modified openWindow so it throws the error if something fails
 // so that openWindowWithRetry can catch it.
 async function openWindow(
@@ -318,12 +318,13 @@ async function openWindow(
   proxy,
   userAgent,
   filterParam,
-  headless
+  headless,
+  videoPlaySeconds
 ) {
   let browser;
   try {
     // Use a reasonable navigation timeout
-    const navigationTimeout = 90000;
+    const navigationTimeout = 120000;
 
     browser = await puppeteer.launch({
       headless: headless,
@@ -343,7 +344,7 @@ async function openWindow(
         ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
       defaultViewport: { width: 1024, height: 600 },
-      timeout: 90000,
+      timeout: 120000,
     });
 
     const page = await browser.newPage();
@@ -365,8 +366,7 @@ async function openWindow(
     await page.setDefaultNavigationTimeout(navigationTimeout);
 
     console.log(`Window ${i + 1}: Navigating to YouTube homepage.`);
-    await navigateWithRetry(page, 'https://www.youtube.com', 5, 90000);
-    await delayFunction(2398);
+    await navigateWithRetry(page, 'https://www.youtube.com', 5, 120000);
 
     await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
     await humanizedType(page, 'input[name="search_query"]', query);
@@ -385,7 +385,6 @@ async function openWindow(
     });
 
     await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
-
     await delayFunction(1987);
 
     // If filterParam is not empty, we apply it
@@ -424,7 +423,7 @@ async function openWindow(
     await waitForAdToFinish(page, 30000);
 
     // Track video playback
-    await trackVideoPlayback(page, i, browser, applyCookies, likeVideo, subscribeChannel);
+    await trackVideoPlayback(page, i, browser, applyCookies, likeVideo, subscribeChannel, videoPlaySeconds);
     
   } catch (error) {
     console.error(`Window ${i + 1} encountered an error: ${error.message}`);
@@ -435,9 +434,17 @@ async function openWindow(
   }
 }
 
-async function trackVideoPlayback(page, windowIndex, browser, applyCookies, likeVideo, subscribeChannel) {
+async function trackVideoPlayback(
+  page,
+  windowIndex,
+  browser,
+  applyCookies,
+  likeVideo,
+  subscribeChannel,
+  videoPlaySeconds
+) {
   // Playback timeout in milliseconds (20 seconds)
-  const playbackTimeout = 30000;
+  const playbackTimeout = 50000;
   const startTime = Date.now(); 
 
   let currentTime = 0;
@@ -445,7 +452,7 @@ async function trackVideoPlayback(page, windowIndex, browser, applyCookies, like
   let playbackStarted = false;
 
   // Attempt to start video playback
-  const maxRetries = 3;
+  const maxRetries = 5;
   let retryCount = 0;
 
   while (!playbackStarted && retryCount < maxRetries) {
@@ -506,8 +513,21 @@ async function trackVideoPlayback(page, windowIndex, browser, applyCookies, like
     }
   }
 
+  // Track how long we’ve played
+  const userStartTime = Date.now();
+  const userPlayTimeMs = videoPlaySeconds * 1000; // convert to ms
+
   // Step 3: Monitor video playback and randomly pause/seek
   while (true) {
+    const elapsed = Date.now() - userStartTime;
+    if (elapsed >= userPlayTimeMs) {
+      console.log(
+        `Window ${windowIndex + 1}: Reached user-defined playback time of ${videoPlaySeconds} seconds. Closing the browser.`
+      );
+      await browser.close();
+      break;
+    }
+
     const videoData = await page.evaluate(() => {
       const videoElement = document.querySelector('video');
       return videoElement
@@ -522,8 +542,8 @@ async function trackVideoPlayback(page, windowIndex, browser, applyCookies, like
       `Window ${windowIndex + 1}: ${currentTime.toFixed(2)} / ${totalDuration.toFixed(2)} seconds`
     );
 
-    // End monitoring if the video is within 12 seconds of completion
-    if (totalDuration > 0 && totalDuration - currentTime <= 18) {
+    // If you also want to close if near the end of the video:
+    if (totalDuration > 0 && totalDuration - currentTime <= 12) {
       console.log(
         `Window ${windowIndex + 1}: Video playback is near the end. Closing the browser.`
       );
@@ -555,7 +575,7 @@ async function trackVideoPlayback(page, windowIndex, browser, applyCookies, like
       }, newTime);
     }
 
-    await delayFunction(5000); // Check playback every 3 seconds
+    await delayFunction(3000); // Check playback every 3 seconds
   }
 }
 
@@ -584,6 +604,7 @@ async function humanizedType(page, selector, text) {
   // 5) Batch size
   // 6) Filter (including 'none')
   // 7) Headless mode
+  // 8) How many seconds to play video?
 
   const initialAnswers = await prompt([
     {
@@ -648,6 +669,12 @@ async function humanizedType(page, selector, text) {
       message: 'Do you want to use headless mode? (No UI)',
       default: true
     },
+    {
+      type: 'number',
+      name: 'videoPlaySeconds',
+      message: 'How many seconds should each video play before closing?',
+      default: 600
+    }
   ]);
 
   // Combine all user responses
@@ -673,11 +700,12 @@ async function humanizedType(page, selector, text) {
     proxies,
     userAgents,
     answers.filter,
-    answers.headless
+    answers.headless,
+    answers.videoPlaySeconds // Pass the new field
   );
 })();
 
-// Start automation with retry-based openWindow calls
+// Updated startAutomation to include videoPlaySeconds
 async function startAutomation(
   query,
   channelName,
@@ -689,7 +717,8 @@ async function startAutomation(
   proxies,
   userAgents,
   filter,
-  headless
+  headless,
+  videoPlaySeconds
 ) {
   // Map filters, including 'none'
   const filterMap = {
@@ -727,6 +756,7 @@ async function startAutomation(
           userAgent,
           filterParam,
           headless,
+          videoPlaySeconds, // pass the user-defined video play time
           5 // Retries
         )
       );

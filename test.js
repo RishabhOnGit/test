@@ -25,7 +25,6 @@ async function navigateWithRetry(page, url, retries = 5, timeout = 90000) {
     } catch (error) {
       if (i === retries - 1) throw error;
       // Minimal log: Show we’re retrying due to an error
-      console.warn(`Navigation error, retrying (${i + 1}/${retries}): ${error.message}`);
       await delayFunction(2000);
     }
   }
@@ -209,14 +208,13 @@ async function randomlyLikeVideo(page, totalDuration) {
 // Force 144p
 async function forceQuality144p(page) {
   try {
-    console.log('Waiting for settings button...');
     // Wait for the settings button and click it (70 seconds timeout)
-    await page.waitForSelector('.ytp-settings-button', { visible: true, timeout: 70000 });
+    await delayFunction(3000);
+    await page.waitForSelector('.ytp-settings-button', { visible: true, timeout: 90000 });
     await page.click('.ytp-settings-button');
-    console.log('Settings button clicked.');
 
     // Wait for the settings menu to appear and scroll to the bottom
-    await page.waitForSelector('.ytp-settings-menu', { visible: true, timeout: 70000 });
+    await page.waitForSelector('.ytp-settings-menu', { visible: true, timeout: 90000 });
     await page.evaluate(() => {
       const menu = document.querySelector('.ytp-settings-menu') || document.querySelector('.ytp-panel-menu');
       if (menu) menu.scrollTop = menu.scrollHeight;
@@ -224,7 +222,6 @@ async function forceQuality144p(page) {
     await delayFunction(500);
 
     // Find and click the "Quality" menu item
-    console.log('Looking for "Quality" menu item...');
     await page.evaluate(() => {
       const items = [...document.querySelectorAll('.ytp-menuitem')];
       const qualityItem = items.find(item => item.textContent.includes('Quality'));
@@ -233,7 +230,6 @@ async function forceQuality144p(page) {
     await delayFunction(500);
 
     // Scroll to the bottom of the quality menu
-    console.log('Scrolling to "144p" option...');
     await page.evaluate(() => {
       const menu = document.querySelector('.ytp-settings-menu') || document.querySelector('.ytp-panel-menu');
       if (menu) menu.scrollTop = menu.scrollHeight;
@@ -241,7 +237,6 @@ async function forceQuality144p(page) {
     await delayFunction(500);
 
     // Select the "144p" resolution
-    console.log('Selecting "144p" resolution...');
     const resolutionSet = await page.evaluate(() => {
       const items = [...document.querySelectorAll('.ytp-menuitem')];
       const resItem = items.find(item => item.textContent.includes('144p'));
@@ -264,64 +259,55 @@ async function forceQuality144p(page) {
   }
 }
 
-async function startAutomation(
+// *** NEW ***
+// A wrapper function to retry opening a single window if any error occurs.
+async function openWindowWithRetry(
+  i,
   query,
   channelName,
   applyCookies,
   likeVideo,
   subscribeChannel,
-  windows,
-  batchSize,
-  proxies,
-  userAgents,
-  filter,
-  headless
+  proxy,
+  userAgent,
+  filterParam,
+  headless,
+  retries = 3
 ) {
-  // Map filters, including 'none'
-  const filterMap = {
-    none: '',
-    'Last hour': '&sp=EgIIAQ%253D%253D',
-    'Today': '&sp=EgIIAg%253D%253D',
-    'This week': '&sp=EgIIAw%253D%253D',
-  };
-
-  const filterParam = filterMap[filter] || '';
-  const totalBatches = Math.ceil(windows / batchSize);
-
-  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-    const startWindow = batchIndex * batchSize;
-    const endWindow = Math.min(startWindow + batchSize, windows);
-
-    console.log(`Starting batch ${batchIndex + 1}/${totalBatches} (Windows ${startWindow + 1}-${endWindow})`);
-    const browserPromises = [];
-
-    for (let i = startWindow; i < endWindow; i++) {
-      // Rotate proxies and user agents
-      const proxy = proxies[i % proxies.length];
-      const userAgent = userAgents[i % userAgents.length];
-
-      browserPromises.push(
-        openWindow(
-          i,
-          query,
-          channelName,
-          applyCookies,
-          likeVideo,
-          subscribeChannel,
-          proxy,
-          userAgent,
-          filterParam,
-          headless
-        )
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await openWindow(
+        i,
+        query,
+        channelName,
+        applyCookies,
+        likeVideo,
+        subscribeChannel,
+        proxy,
+        userAgent,
+        filterParam,
+        headless
       );
-    }
+      // If successful, break out of the retry loop
+      console.log(`Window ${i+1}: Succeeded on attempt ${attempt}`);
+      return;
+    } catch (error) {
+      console.error(`Window ${i+1}: Attempt ${attempt} failed with error: ${error.message}`);
 
-    await Promise.allSettled(browserPromises); // Wait for all windows in this batch to complete
-    console.log(`Batch ${batchIndex + 1} completed.`);
+      if (attempt < retries) {
+        // Wait before retrying
+        console.log(`Window ${i+1}: Retrying in 3 seconds...`);
+        await delayFunction(4000);
+      } else {
+        console.error(`Window ${i+1}: All ${retries} attempts failed. Skipping...`);
+      }
+    }
   }
 }
 
-// Open a single browser window and track video playback
+// *** IMPORTANT ***
+// Modified openWindow so it throws the error if something fails
+// so that openWindowWithRetry can catch it.
 async function openWindow(
   i,
   query,
@@ -354,7 +340,6 @@ async function openWindow(
         '--disable-background-timer-throttling',
         '--disable-renderer-backgrounding',
         '--disable-backgrounding-occluded-windows',
-        // '--disable-software-rasterizer',
         ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
       defaultViewport: { width: 1024, height: 600 },
@@ -381,7 +366,7 @@ async function openWindow(
 
     console.log(`Window ${i + 1}: Navigating to YouTube homepage.`);
     await navigateWithRetry(page, 'https://www.youtube.com', 5, 90000);
-    // await page.reload({ waitUntil: 'networkidle2', timeout: 90000 });
+    await delayFunction(2398);
 
     await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
     await humanizedType(page, 'input[name="search_query"]', query);
@@ -390,22 +375,17 @@ async function openWindow(
     // Hide possible ads right after searching
     await page.evaluate(() => {
       const adOverlay = document.querySelector('.ytp-ad-overlay-container');
-      if (adOverlay) {
-        adOverlay.style.display = 'none';
-      }
+      if (adOverlay) adOverlay.style.display = 'none';
+
       const bannerAd = document.querySelector('.ytp-ad-banner');
-      if (bannerAd) {
-        bannerAd.style.display = 'none';
-      }
+      if (bannerAd) bannerAd.style.display = 'none';
+
       const videoAd = document.querySelector('.video-ads');
-      if (videoAd) {
-        videoAd.style.display = 'none';
-      }
+      if (videoAd) videoAd.style.display = 'none';
     });
 
     await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
 
-    console.log(`Window ${i + 1}: Adding delay before applying the filter.`);
     await delayFunction(1987);
 
     // If filterParam is not empty, we apply it
@@ -417,7 +397,6 @@ async function openWindow(
       await page.goto(newUrl, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
     } else {
-      console.log(`Window ${i + 1}: No filter selected ('none').`);
     }
     
     await delayFunction(1324);
@@ -427,17 +406,14 @@ async function openWindow(
       console.log(`Window ${i + 1}: Searching for channel "${channelName}"...`);
       const found = await findAndClickVideoByChannel(page, channelName);
       if (!found) {
-        console.error(`Window ${i + 1}: Could not find any video from channel "${channelName}".`);
-        return; // Stop this window if channel video not found
+        throw new Error(`Could not find any video from channel "${channelName}"`);
       }
     } else {
-      console.log(`Window ${i + 1}: Channel name is empty -> clicking first video.`);
       const videoSelector = 'ytd-video-renderer #video-title';
       await page.waitForSelector(videoSelector, { visible: true, timeout: navigationTimeout });
       const firstVideo = await page.$(videoSelector);
       if (!firstVideo) {
-        console.error(`Window ${i + 1}: No videos found. Exiting.`);
-        return;
+        throw new Error('No videos found after search');
       }
       await firstVideo.click();
     }
@@ -452,6 +428,8 @@ async function openWindow(
     
   } catch (error) {
     console.error(`Window ${i + 1} encountered an error: ${error.message}`);
+    // Re-throw so openWindowWithRetry can catch it
+    throw error;
   } finally {
     await safelyCloseBrowser(browser, i); // Ensure browser is closed
   }
@@ -459,7 +437,7 @@ async function openWindow(
 
 async function trackVideoPlayback(page, windowIndex, browser, applyCookies, likeVideo, subscribeChannel) {
   // Playback timeout in milliseconds (20 seconds)
-  const playbackTimeout = 20000;
+  const playbackTimeout = 30000;
   const startTime = Date.now(); 
 
   let currentTime = 0;
@@ -545,7 +523,7 @@ async function trackVideoPlayback(page, windowIndex, browser, applyCookies, like
     );
 
     // End monitoring if the video is within 12 seconds of completion
-    if (totalDuration > 0 && totalDuration - currentTime <= 12) {
+    if (totalDuration > 0 && totalDuration - currentTime <= 18) {
       console.log(
         `Window ${windowIndex + 1}: Video playback is near the end. Closing the browser.`
       );
@@ -577,7 +555,7 @@ async function trackVideoPlayback(page, windowIndex, browser, applyCookies, like
       }, newTime);
     }
 
-    await delayFunction(3000); // Check playback every 3 seconds
+    await delayFunction(5000); // Check playback every 3 seconds
   }
 }
 
@@ -684,7 +662,6 @@ async function humanizedType(page, selector, text) {
   // Read user agents from file
   const userAgents = readUserAgentsFromFile(userAgentFilePath);
 
-  // Start automation
   await startAutomation(
     answers.query,
     answers.channelName,
@@ -698,5 +675,64 @@ async function humanizedType(page, selector, text) {
     answers.filter,
     answers.headless
   );
-
 })();
+
+// Start automation with retry-based openWindow calls
+async function startAutomation(
+  query,
+  channelName,
+  applyCookies,
+  likeVideo,
+  subscribeChannel,
+  windows,
+  batchSize,
+  proxies,
+  userAgents,
+  filter,
+  headless
+) {
+  // Map filters, including 'none'
+  const filterMap = {
+    none: '',
+    'Last hour': '&sp=EgIIAQ%253D%253D',
+    'Today': '&sp=EgIIAg%253D%253D',
+    'This week': '&sp=EgIIAw%253D%253D',
+  };
+
+  const filterParam = filterMap[filter] || '';
+  const totalBatches = Math.ceil(windows / batchSize);
+
+  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+    const startWindow = batchIndex * batchSize;
+    const endWindow = Math.min(startWindow + batchSize, windows);
+
+    console.log(`Starting batch ${batchIndex + 1}/${totalBatches} (Windows ${startWindow + 1}-${endWindow})`);
+    const browserPromises = [];
+
+    for (let i = startWindow; i < endWindow; i++) {
+      // Rotate proxies and user agents
+      const proxy = proxies[i % proxies.length];
+      const userAgent = userAgents[i % userAgents.length];
+
+      // Instead of openWindow(), we call openWindowWithRetry
+      browserPromises.push(
+        openWindowWithRetry(
+          i,
+          query,
+          channelName,
+          applyCookies,
+          likeVideo,
+          subscribeChannel,
+          proxy,
+          userAgent,
+          filterParam,
+          headless,
+          3 // Retries
+        )
+      );
+    }
+
+    await Promise.allSettled(browserPromises); // Wait for all windows in this batch to complete
+    console.log(`Batch ${batchIndex + 1} completed.`);
+  }
+}

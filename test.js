@@ -331,11 +331,15 @@ async function openWindow(
         '--disable-infobars',
         '--window-size=1024,600',
         '--disable-blink-features=AutomationControlled',
-        '--disable-software-rasterizer',
+        '--disable-dev-shm-usage',
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+        // '--disable-software-rasterizer',
         ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
       defaultViewport: { width: 1024, height: 600 },
-      timeout: 70000,
+      timeout: 90000,
     });
 
     const page = await browser.newPage();

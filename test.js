@@ -272,7 +272,7 @@ async function openWindowWithRetry(
   userAgent,
   filterParam,
   headless,
-  retries = 3
+  retries = 5
 ) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -727,7 +727,7 @@ async function startAutomation(
           userAgent,
           filterParam,
           headless,
-          3 // Retries
+          5 // Retries
         )
       );
     }

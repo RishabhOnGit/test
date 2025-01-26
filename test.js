@@ -18,7 +18,7 @@ function delayFunction(ms) {
 
 // ----------------------------------------------------------
 // Utility: navigateWithRetry
-async function navigateWithRetry(page, url, retries = 5, timeout = 120000) {
+async function navigateWithRetry(page, url, retries = 5, timeout = 60000) {
   for (let i = 0; i < retries; i++) {
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
@@ -90,10 +90,10 @@ async function safelyCloseBrowser(browser, windowIndex) {
 async function forceQuality144p(page) {
   try {
     await delayFunction(1000);
-    await page.waitForSelector('.ytp-settings-button', { visible: true, timeout: 120000 });
+    await page.waitForSelector('.ytp-settings-button', { visible: true, timeout: 60000 });
     await page.click('.ytp-settings-button');
 
-    await page.waitForSelector('.ytp-settings-menu', { visible: true, timeout: 120000 });
+    await page.waitForSelector('.ytp-settings-menu', { visible: true, timeout: 60000 });
     // Scroll the settings menu to ensure "Quality" is visible
     await page.evaluate(() => {
       const menu = document.querySelector('.ytp-settings-menu, .ytp-panel-menu');
@@ -401,7 +401,7 @@ async function openWindow(
 ) {
   let browser;
   try {
-    const navigationTimeout = 120000;
+    const navigationTimeout = 60000;
     browser = await puppeteer.launch({
       headless,
       executablePath: '/usr/bin/chromium-browser', // adjust if needed

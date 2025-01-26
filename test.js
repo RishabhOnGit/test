@@ -49,9 +49,7 @@ async function findAndClickVideoByChannel(page, channelName, maxScrollAttempts =
       }
     }
     console.log(`Channel "${channelName}" not found yet, scrolling further...`);
-    await page.evaluate(() => {
-      window.scrollBy(0, 800);
-    });
+    await page.evaluate(() => window.scrollBy(0, 800));
     await delayFunction(1500);
     attempts++;
   }
@@ -63,7 +61,9 @@ async function waitForAdToFinish(page, timeout = 30000) {
   const startTime = Date.now();
   while (true) {
     const isSponsoredAdVisible = await page.evaluate(() => {
-      const sponsoredBadge = document.querySelector('.ad-simple-attributed-string.ytp-ad-badge__text--clean-player');
+      const sponsoredBadge = document.querySelector(
+        '.ad-simple-attributed-string.ytp-ad-badge__text--clean-player'
+      );
       return sponsoredBadge && sponsoredBadge.style.display !== 'none';
     });
     if (!isSponsoredAdVisible) break;
@@ -193,7 +193,10 @@ async function subscribeToChannelDuringPlayback(page, totalDuration) {
   }
 }
 
-// trackVideoPlayback - closes the video once currentTime >= videoPlaySeconds
+/**
+ * trackVideoPlayback - closes the video once currentTime >= videoPlaySeconds
+ * If video stuck at 0/0 for 10s, reload once; if still stuck, close.
+ */
 async function trackVideoPlayback(
   page,
   windowIndex,
@@ -203,17 +206,17 @@ async function trackVideoPlayback(
   subscribeChannel,
   videoPlaySeconds
 ) {
-  // We'll give up if video not started after 50s
   const playbackTimeout = 50000;
   const startTime = Date.now();
 
   let playbackStarted = false;
   let totalDuration = 0;
+  let stuckReloadDone = false; // For one-time reload if stuck
 
+  // Wait for the video to have a real totalDuration
   const maxRetries = 5;
   let retryCount = 0;
 
-  // Wait for playback to show a real totalDuration
   while (!playbackStarted && retryCount < maxRetries) {
     if (Date.now() - startTime > playbackTimeout) {
       console.error(`Window ${windowIndex + 1}: No playback after ${playbackTimeout} ms. Reloading...`);
@@ -227,9 +230,7 @@ async function trackVideoPlayback(
     if (videoData && videoData.totalDuration > 0) {
       totalDuration = videoData.totalDuration;
       playbackStarted = true;
-      console.log(
-        `Window ${windowIndex + 1}: Playback started. Duration: ${totalDuration.toFixed(2)} sec.`
-      );
+      console.log(`Window ${windowIndex + 1}: Playback started. Duration: ${totalDuration.toFixed(2)} sec.`);
     } else {
       retryCount++;
       if (retryCount < maxRetries) {
@@ -260,6 +261,10 @@ async function trackVideoPlayback(
     }
   }
 
+  // Monitor playback
+  let stuckCheckStart = 0; // When we first detect stuck at 0/0
+  let isStuck = false;
+
   while (true) {
     const videoData = await page.evaluate(() => {
       const v = document.querySelector('video');
@@ -273,6 +278,36 @@ async function trackVideoPlayback(
     console.log(
       `Window ${windowIndex + 1}: currentTime=${currTime.toFixed(2)} / ${dur.toFixed(2)} sec`
     );
+
+    // If stuck at 0/0
+    if (dur === 0 && currTime === 0) {
+      if (!isStuck) {
+        // just got stuck
+        isStuck = true;
+        stuckCheckStart = Date.now();
+        console.warn(`Window ${windowIndex + 1}: Detected 0/0 stuck, starting 10s timer...`);
+      } else {
+        // already stuck, check how long
+        const stuckElapsed = Date.now() - stuckCheckStart;
+        if (stuckElapsed >= 10000) {
+          if (!stuckReloadDone) {
+            // do one-time reload
+            console.warn(`Window ${windowIndex + 1}: Stuck 0/0 for 10s -> Reloading page once.`);
+            stuckReloadDone = true;
+            await page.reload({ waitUntil: 'domcontentloaded' });
+            // after reload, break from loop to let the function end or next iteration handle new state
+            break;
+          } else {
+            console.error(`Window ${windowIndex + 1}: Already reloaded once, still stuck -> Closing`);
+            await browser.close();
+            break;
+          }
+        }
+      }
+    } else {
+      // not stuck
+      isStuck = false;
+    }
 
     // 1) If currentTime >= user-specified time -> close
     if (currTime >= videoPlaySeconds) {
@@ -549,6 +584,68 @@ async function injectCookies(page, cookies) {
   }
 }
 
+// Batching logic
+async function startAutomation(
+  query,
+  channelName,
+  applyCookies,
+  likeVideo,
+  subscribeChannel,
+  windows,
+  batchSize,
+  proxies,
+  userAgents,
+  filter,
+  headless,
+  videoPlaySeconds
+) {
+  // map filters
+  const filterMap = {
+    none: '',
+    'Last hour': '&sp=EgIIAQ%253D%253D',
+    'Today': '&sp=EgIIAg%253D%253D',
+    'This week': '&sp=EgIIAw%253D%253D'
+  };
+  const filterParam = filterMap[filter] || '';
+
+  const totalBatches = Math.ceil(windows / batchSize);
+
+  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+    const startWindow = batchIndex * batchSize;
+    const endWindow = Math.min(startWindow + batchSize, windows);
+
+    console.log(`Starting batch ${batchIndex + 1}/${totalBatches} (Windows ${startWindow + 1}-${endWindow})`);
+    const browserPromises = [];
+
+    for (let i = startWindow; i < endWindow; i++) {
+      const proxy = proxies[i % proxies.length] || null;
+      const userAgent = userAgents[i % userAgents.length] || 'Mozilla/5.0';
+
+      browserPromises.push(
+        openWindowWithRetry(
+          i,
+          query,
+          channelName,
+          applyCookies,
+          likeVideo,
+          subscribeChannel,
+          proxy,
+          userAgent,
+          filterParam,
+          headless,
+          videoPlaySeconds,
+          5
+        )
+      );
+    }
+
+    // Wait for all in this batch
+    await Promise.allSettled(browserPromises);
+    console.log(`Batch ${batchIndex + 1} completed.`);
+  }
+  console.log('All batches completed!');
+}
+
 // Main user prompts
 (async () => {
   const prompt = inquirer.createPromptModule();
@@ -557,15 +654,7 @@ async function injectCookies(page, cookies) {
   const proxyFilePath = path.join(__dirname, 'proxies.txt');
   const userAgentFilePath = path.join(__dirname, 'useragent.txt');
 
-  // 1) query
-  // 2) channelName
-  // 3) applyCookies? -> if yes, ask about likeVideo, subscribeChannel
-  // 4) windows
-  // 5) batchSize
-  // 6) filter
-  // 7) headless?
-  // 8) videoPlaySeconds
-
+  // Prompt sets
   const answers1 = await prompt([
     {
       type: 'input',
@@ -662,65 +751,3 @@ async function injectCookies(page, cookies) {
     finalAnswers.videoPlaySeconds
   );
 })();
-
-// Batching logic
-async function startAutomation(
-  query,
-  channelName,
-  applyCookies,
-  likeVideo,
-  subscribeChannel,
-  windows,
-  batchSize,
-  proxies,
-  userAgents,
-  filter,
-  headless,
-  videoPlaySeconds
-) {
-  // map filters
-  const filterMap = {
-    none: '',
-    'Last hour': '&sp=EgIIAQ%253D%253D',
-    'Today': '&sp=EgIIAg%253D%253D',
-    'This week': '&sp=EgIIAw%253D%253D'
-  };
-  const filterParam = filterMap[filter] || '';
-
-  const totalBatches = Math.ceil(windows / batchSize);
-
-  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-    const startWindow = batchIndex * batchSize;
-    const endWindow = Math.min(startWindow + batchSize, windows);
-
-    console.log(`Starting batch ${batchIndex + 1}/${totalBatches} (Windows ${startWindow + 1}-${endWindow})`);
-    const browserPromises = [];
-
-    for (let i = startWindow; i < endWindow; i++) {
-      const proxy = proxies[i % proxies.length] || null;
-      const userAgent = userAgents[i % userAgents.length] || 'Mozilla/5.0';
-
-      browserPromises.push(
-        openWindowWithRetry(
-          i,
-          query,
-          channelName,
-          applyCookies,
-          likeVideo,
-          subscribeChannel,
-          proxy,
-          userAgent,
-          filterParam,
-          headless,
-          videoPlaySeconds,
-          5
-        )
-      );
-    }
-
-    // Wait for all in this batch
-    await Promise.allSettled(browserPromises);
-    console.log(`Batch ${batchIndex + 1} completed.`);
-  }
-  console.log('All batches completed!');
-}

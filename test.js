@@ -204,51 +204,50 @@ async function trackVideoPlayback(
   subscribeChannel,
   videoPlaySeconds
 ) {
-  const playbackTimeout = 50000;
+  const playbackTimeout = 50000; // Timeout to detect playback
   const startTime = Date.now();
-
   let playbackStarted = false;
   let totalDuration = 0;
-  let stuckReloadDone = false;
-
-  const maxRetries = 5;
   let retryCount = 0;
+  let lastCurrentTime = 0;
+  let stuckDuration = 0;
+  const maxRetries = 5;
 
   while (!playbackStarted && retryCount < maxRetries) {
     if (Date.now() - startTime > playbackTimeout) {
-      console.error(`Window ${windowIndex + 1}: No playback after ${playbackTimeout} ms. Reloading...`);
+      console.error(`Window ${windowIndex + 1}: Playback not started within ${playbackTimeout} ms. Reloading...`);
       await page.reload({ waitUntil: 'domcontentloaded' });
-      break;
+      retryCount++;
+      continue;
     }
+
     const videoData = await page.evaluate(() => {
-      const vid = document.querySelector('video');
-      return vid ? { currentTime: vid.currentTime, totalDuration: vid.duration } : null;
+      const videoElement = document.querySelector('video');
+      return videoElement
+        ? { currentTime: videoElement.currentTime, totalDuration: videoElement.duration }
+        : null;
     });
+
     if (videoData && videoData.totalDuration > 0) {
       totalDuration = videoData.totalDuration;
       playbackStarted = true;
-      console.log(`Window ${windowIndex + 1}: Playback started. Duration: ${totalDuration.toFixed(2)} sec.`);
+      console.log(
+        `Window ${windowIndex + 1}: Playback started. Duration: ${totalDuration.toFixed(2)} seconds.`
+      );
     } else {
-      retryCount++;
-      if (retryCount < maxRetries) {
-        console.log(`Window ${windowIndex + 1}: Checking playback again...`);
-        await delayFunction(5000);
-      } else {
-        console.error(`Window ${windowIndex + 1}: Playback never started. Exiting...`);
-        return;
-      }
+      console.log(`Window ${windowIndex + 1}: Checking for playback start...`);
+      await delayFunction(5000);
     }
   }
 
   if (!playbackStarted) {
-    console.error(`Window ${windowIndex + 1}: No playback, skipping...`);
+    console.error(`Window ${windowIndex + 1}: Playback did not start. Exiting.`);
+    await browser.close();
     return;
   }
 
-  // Attempt 144p
   await forceQuality144p(page);
 
-  // Like/subscribe if cookies
   if (applyCookies) {
     if (likeVideo) {
       await randomlyLikeVideo(page, totalDuration);
@@ -258,14 +257,24 @@ async function trackVideoPlayback(
     }
   }
 
-  let stuckCheckStart = 0;
-  let isStuck = false;
+  const userPlayTimeMs = videoPlaySeconds * 1000;
+  const userStartTime = Date.now();
 
   while (true) {
+    const elapsed = Date.now() - userStartTime;
+    if (elapsed >= userPlayTimeMs) {
+      console.log(
+        `Window ${windowIndex + 1}: User-defined playback time of ${videoPlaySeconds} seconds reached. Closing.`
+      );
+      await browser.close();
+      break;
+    }
+
     const videoData = await page.evaluate(() => {
-      const vid = document.querySelector('video');
-      if (!vid) return { currentTime: 0, totalDuration: 0 };
-      return { currentTime: vid.currentTime, totalDuration: vid.duration };
+      const videoElement = document.querySelector('video');
+      return videoElement
+        ? { currentTime: videoElement.currentTime || 0, totalDuration: videoElement.duration || 0 }
+        : { currentTime: 0, totalDuration: 0 };
     });
 
     const currTime = videoData.currentTime || 0;
@@ -273,67 +282,48 @@ async function trackVideoPlayback(
 
     console.log(`Window ${windowIndex + 1}: currentTime=${currTime.toFixed(2)} / ${dur.toFixed(2)} sec`);
 
-    // Stuck at 0/0 check
-    if (dur === 0 && currTime === 0) {
-      if (!isStuck) {
-        isStuck = true;
-        stuckCheckStart = Date.now();
-        console.warn(`Window ${windowIndex + 1}: Detected 0/0 stuck, starting 10s timer...`);
-      } else {
-        const stuckElapsed = Date.now() - stuckCheckStart;
-        if (stuckElapsed >= 10000) {
-          if (!stuckReloadDone) {
-            console.warn(`Window ${windowIndex + 1}: Stuck 0/0 for 10s -> Reloading page once.`);
-            stuckReloadDone = true;
-            await page.reload({ waitUntil: 'domcontentloaded' });
-            break; // let next iteration handle new state
-          } else {
-            console.error(`Window ${windowIndex + 1}: Already reloaded, still stuck -> Closing`);
-            await browser.close();
-            break;
-          }
-        }
+    if (currTime >= videoPlaySeconds || (dur > 0 && dur - currTime <= 12)) {
+      console.log(`Window ${windowIndex + 1}: Closing as playback time reached or near end.`);
+      await browser.close();
+      break;
+    }
+
+    if (currTime === lastCurrentTime) {
+      stuckDuration += 5; // Check every 5 seconds
+      console.log(`Window ${windowIndex + 1}: currentTime stuck at ${currTime} for ${stuckDuration} seconds.`);
+      if (stuckDuration >= 15) {
+        console.log(`Window ${windowIndex + 1}: Stuck for too long. Refreshing.`);
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        stuckDuration = 0;
+        lastCurrentTime = 0;
+        continue;
       }
     } else {
-      // not stuck
-      isStuck = false;
+      stuckDuration = 0; // Reset if currentTime changes
     }
 
-    // 1) If currentTime >= user-specified time -> close
-    if (currTime >= videoPlaySeconds) {
-      console.log(`Window ${windowIndex + 1}: currentTime >= ${videoPlaySeconds} -> closing.`);
-      await browser.close();
-      break;
-    }
+    lastCurrentTime = currTime;
 
-    // 2) If near the end
-    if (dur > 0 && dur - currTime <= 12) {
-      console.log(`Window ${windowIndex + 1}: Near end -> closing.`);
-      await browser.close();
-      break;
-    }
-
-    // Random pause/resume
+    // Add random pause and seek behavior
     if (Math.random() < 0.15) {
       await page.evaluate(() => {
-        const vid = document.querySelector('video');
-        if (vid) vid.pause();
+        const videoElement = document.querySelector('video');
+        if (videoElement) videoElement.pause();
       });
       await delayFunction(Math.random() * 5000 + 2000);
       await page.evaluate(() => {
-        const vid = document.querySelector('video');
-        if (vid) vid.play();
+        const videoElement = document.querySelector('video');
+        if (videoElement) videoElement.play();
       });
     }
 
-    // Random seek
     if (Math.random() < 0.1) {
       const seekTime = Math.random() * 10;
       const seekDirection = Math.random() > 0.5 ? 1 : -1;
       const newTime = Math.max(0, Math.min(currTime + seekDirection * seekTime, dur));
-      await page.evaluate(t => {
-        const vid = document.querySelector('video');
-        if (vid) vid.currentTime = t;
+      await page.evaluate(newTime => {
+        const videoElement = document.querySelector('video');
+        if (videoElement) videoElement.currentTime = newTime;
       }, newTime);
     }
 

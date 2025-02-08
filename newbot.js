@@ -1,127 +1,116 @@
-/*************************************************************
- * newbot.js - Stealth YouTube Bot (Worker)
- * -----------------------------------------------------------
- * 1) Listens on port 3000
- * 2) Maintains global stats:
- *    - totalWindowsOpened
- *    - totalRefreshes
- *    - totalViews
- *    - totalWatchTimeSec
- *    - totalCrashes
- * 3) Provides "/start-bot" to begin automation
- * 4) Provides "/stats" to fetch current stats
- *************************************************************/
+/*******************************************************
+ * worker.js - STEALTH YOUTUBE BOT with cookies + like + subscribe
+ *
+ * 1) Exposes:
+ *    - GET /stats -> returns { totalViews, totalWatchTime, totalRefreshes, activeWindows }
+ *    - POST /start-bot -> receives { query, windows, useProxies, proxyFilePath, userAgentFilePath, filter, channelName, headless, applyCookies, likeVideo, subscribeChannel }
+ * 2) Uses Puppeteer with stealth + concurrency
+ * 3) If applyCookies = true, loads cookies for each window
+ * 4) If likeVideo = true or subscribeChannel = true, tries them mid-playback
+ *******************************************************/
 
-const puppeteer = require('puppeteer-extra');
 const express = require('express');
 const bodyParser = require('body-parser');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const fs = require('fs');
 const path = require('path');
 
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker');
-
-// PLUGINS
+// Add stealth plugin
 puppeteer.use(StealthPlugin());
-puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
 
-// =======================================================
-// Global Stats
-// =======================================================
+// Global stats
 const globalStats = {
-  totalWindowsOpened: 0,
-  totalRefreshes: 0,       // number of times a window reloaded
-  totalViews: 0,           // total videos completed
-  totalWatchTimeSec: 0,    // cumulative watch time (in seconds)
-  totalCrashes: 0          // windows that failed all retries
+  totalViews: 0,
+  totalWatchTime: 0,  // in seconds
+  totalRefreshes: 0,
+  activeWindows: 0
 };
 
-// =======================================================
-// Express Setup
-// =======================================================
 const app = express();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// GET /stats -> Return the global stats as JSON
+// Route: GET /stats -> returns globalStats
 app.get('/stats', (req, res) => {
   res.json(globalStats);
 });
 
-// POST /start-bot -> Trigger the automation
+// Route: simple welcome
+app.get('/', (req, res) => {
+  res.send(`
+    <h1>Worker Bot is Running (Stealth + Cookies + Like/Subscribe)</h1>
+    <p>POST /start-bot with JSON to run the automation.</p>
+    <p>GET /stats to see globalStats as JSON.</p>
+  `);
+});
+
+// POST /start-bot
 app.post('/start-bot', async (req, res) => {
   try {
-    // Extract parameters
     const {
       query = '',
       channelName = '',
+      windows = 1,
+      useProxies = false,
+      proxyFilePath = './proxies.txt',
+      userAgentFilePath = './useragent.txt',
+      filter = 'Last hour',
+      headless = true,
+
+      // NEW fields
       applyCookies = false,
       likeVideo = false,
-      subscribeChannel = false,
-      totalWindows = 2,
-      maxConcurrent = 1,
-      filter = 'none',
-      headless = true,
-      videoPlaySeconds = 60
+      subscribeChannel = false
     } = req.body;
 
-    // Convert numeric fields
-    const totalW = parseInt(totalWindows);
-    const maxC = parseInt(maxConcurrent);
-    const vidSecs = parseInt(videoPlaySeconds);
-    const isHeadless = (headless === true || headless === 'true');
-
-    // CLEAR or reset stats if you want fresh numbers each time
-    // (Remove if you want cumulative stats across runs)
-    globalStats.totalWindowsOpened = 0;
-    globalStats.totalRefreshes = 0;
+    // Reset stats each run (or remove if you want cumulative)
     globalStats.totalViews = 0;
-    globalStats.totalWatchTimeSec = 0;
-    globalStats.totalCrashes = 0;
+    globalStats.totalWatchTime = 0;
+    globalStats.totalRefreshes = 0;
+    globalStats.activeWindows = 0;
 
-    // read proxies & userAgents from files
-    const proxyFilePath = path.join(__dirname, 'proxies.txt');
-    const userAgentFilePath = path.join(__dirname, 'useragent.txt');
-    const proxies = readProxiesFromFile(proxyFilePath);
+    let proxies = [];
+    if (useProxies && proxyFilePath) {
+      proxies = readProxiesFromFile(proxyFilePath);
+    }
     const userAgents = readUserAgentsFromFile(userAgentFilePath);
 
-    // Start concurrency
-    await startDynamicAutomation(
+    await startAutomation(
       query,
-      channelName,
-      applyCookies,
-      likeVideo,
-      subscribeChannel,
-      totalW,
-      maxC,
+      parseInt(windows),
+      useProxies,
       proxies,
       userAgents,
       filter,
-      isHeadless,
-      vidSecs
+      channelName,
+      (headless === true || headless === 'true'),
+      applyCookies,
+      likeVideo,
+      subscribeChannel
     );
 
-    res.json({ success: true, message: 'Stealth Bot run completed.' });
+    res.json({ success: true, message: 'Bot started with cookies/like/subscribe logic.' });
   } catch (err) {
     console.error('Error in /start-bot:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Start the Worker server on port 3000
+// Start listening
 const PORT = 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`YouTube Bot API (Stealth) running on port ${PORT}`);
+  console.log(`Stealth Worker Bot listening on port ${PORT}`);
 });
 
-// =======================================================
-// Utility & Core Logic (Same from your stealth code,
-// but with added globalStats updates)
-// =======================================================
-const puppeteerExtra = require('puppeteer-extra'); // For clarity
-const StealthPlug = require('puppeteer-extra-plugin-stealth');
+/*******************************************************
+ * ============= CORE BOT LOGIC BELOW ==================
+ *******************************************************/
 
-// Use your existing concurrency & watchers code:
+// Puppeteer logic with concurrency
+const puppeteerExtra = require('puppeteer-extra');
+const delayFunction = ms => new Promise(r => setTimeout(r, ms));
+
 function readProxiesFromFile(filePath) {
   try {
     if (!fs.existsSync(filePath)) return [];
@@ -135,7 +124,7 @@ function readProxiesFromFile(filePath) {
       return { username, password, ip, port };
     }).filter(Boolean);
   } catch (err) {
-    console.error(`Error reading proxy file: ${err.message}`);
+    console.error('Error reading proxies:', err.message);
     return [];
   }
 }
@@ -146,333 +135,332 @@ function readUserAgentsFromFile(filePath) {
     const data = fs.readFileSync(filePath, 'utf8');
     return data.split('\n').map(line => line.trim()).filter(Boolean);
   } catch (err) {
-    console.error(`Error reading useragent file: ${err.message}`);
+    console.error('Error reading useragent:', err.message);
     return [];
   }
 }
 
-// A simplified concurrency approach
-async function startDynamicAutomation(
-  query, channelName,
-  applyCookies, likeVideo, subscribeChannel,
-  totalWindows, maxConcurrent,
-  proxies, userAgents,
-  filter, headless, videoPlaySeconds
+// Load cookies if applyCookies is true
+function loadCookiesForWindow(index) {
+  // Example: cookies/profile1_cookies.json, cookies/profile2_cookies.json, etc.
+  const cookiesDir = path.join(__dirname, 'cookies');
+  if (!fs.existsSync(cookiesDir)) {
+    return [];
+  }
+  const cookieFile = path.join(cookiesDir, `profile${index+1}_cookies.json`);
+  if (!fs.existsSync(cookieFile)) {
+    return [];
+  }
+  try {
+    const fileData = fs.readFileSync(cookieFile, 'utf8');
+    return JSON.parse(fileData);
+  } catch (error) {
+    console.error('Error parsing cookies for window', index+1, error.message);
+    return [];
+  }
+}
+
+// Main concurrency
+async function startAutomation(
+  query, windows, useProxies, proxies, userAgents,
+  filter, channelName, headless,
+  applyCookies, likeVideo, subscribeChannel
 ) {
   const filterMap = {
-    none: '',
     'Last hour': '&sp=EgIIAQ%253D%253D',
     'Today': '&sp=EgIIAg%253D%253D',
     'This week': '&sp=EgIIAw%253D%253D'
   };
   const filterParam = filterMap[filter] || '';
 
-  let completedCount = 0;
-  let nextWindowIndex = 0;
-  const activeWindows = new Set();
+  const batchSize = 5; // how many parallel
+  const totalBatches = Math.ceil(windows / batchSize);
 
-  while (completedCount < totalWindows) {
-    // Launch new windows if under concurrency
-    while (activeWindows.size < maxConcurrent && nextWindowIndex < totalWindows) {
-      const currIndex = nextWindowIndex++;
-      const proxy = proxies[currIndex % proxies.length] || null;
-      const userAgent = userAgents[currIndex % userAgents.length] || 'Mozilla/5.0';
-
-      globalStats.totalWindowsOpened++; // increment each time we open a window
-
-      const promise = openWindowWithRetry(
-        currIndex,
-        query, channelName,
-        applyCookies, likeVideo, subscribeChannel,
-        proxy, userAgent,
-        filterParam,
-        headless,
-        videoPlaySeconds,
-        3 // let's say 3 retries
-      )
-        .then(() => {
-          activeWindows.delete(promise);
-          completedCount++;
-        })
-        .catch(() => {
-          activeWindows.delete(promise);
-          completedCount++;
-        });
-
-      activeWindows.add(promise);
+  for (let b = 0; b < totalBatches; b++) {
+    const start = b * batchSize;
+    const end = Math.min(start+batchSize, windows);
+    console.log(`Starting batch ${b+1}/${totalBatches} (windows ${start+1}-${end})`);
+    const tasks = [];
+    for (let i = start; i < end; i++) {
+      const px = useProxies ? proxies[i % proxies.length] : null;
+      const ua = userAgents[i % userAgents.length] || 'Mozilla/5.0';
+      tasks.push(openWindow(
+        i, query, filterParam, px, ua, channelName, headless,
+        applyCookies, likeVideo, subscribeChannel
+      ));
     }
-
-    if (activeWindows.size > 0) {
-      await Promise.race(activeWindows);
-    }
+    await Promise.allSettled(tasks);
   }
 }
 
-// Retry logic
-async function openWindowWithRetry(
-  i,
-  query, channelName,
-  applyCookies, likeVideo, subscribeChannel,
-  proxy, userAgent, filterParam,
-  headless, videoPlaySeconds,
-  retries
-) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      await openWindow(
-        i,
-        query, channelName,
-        applyCookies, likeVideo, subscribeChannel,
-        proxy, userAgent, filterParam,
-        headless, videoPlaySeconds
-      );
-      return;
-    } catch (err) {
-      console.error(`Window ${i+1} attempt ${attempt} failed: ${err.message}`);
-      if (attempt < retries) {
-        await delayFunction(3000);
-      } else {
-        // All attempts failed => "crash"
-        globalStats.totalCrashes++;
-      }
-    }
-  }
-}
-
-// The main function that opens a single window
+// Open a single window
 async function openWindow(
-  i,
-  query, channelName,
-  applyCookies, likeVideo, subscribeChannel,
-  proxy, userAgent, filterParam,
-  headless, videoPlaySeconds
+  index, query, filterParam, proxy, userAgent, channelName, headless,
+  applyCookies, likeVideo, subscribeChannel
 ) {
   let browser;
   try {
-    browser = await launchBrowser(headless, proxy);
-    const page = await browser.newPage();
+    browser = await puppeteer.launch({
+      headless,
+      args: [
+        '--no-sandbox', '--disable-setuid-sandbox',
+        '--disable-accelerated-2d-canvas', '--disable-gpu',
+        '--disable-infobars', '--window-size=1024,600',
+        '--disable-blink-features=AutomationControlled',
+        ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : [])
+      ],
+      defaultViewport: { width: 1024, height: 600 },
+      timeout: 60000
+    });
 
-    if (proxy && proxy.username && proxy.password) {
-      await page.authenticate({ username: proxy.username, password: proxy.password });
+    globalStats.activeWindows++;
+
+    const page = await browser.newPage();
+    if (applyCookies) {
+      const cookies = loadCookiesForWindow(index);
+      if (cookies && cookies.length > 0) {
+        await page.setCookie(...cookies);
+      }
     }
 
     await page.setUserAgent(userAgent);
-    await page.setDefaultNavigationTimeout(60000);
+    await page.setDefaultNavigationTimeout(90000);
 
     // Navigate to YT
+    console.log(`Window ${index+1}: Navigate to YT`);
     await page.goto('https://www.youtube.com', { waitUntil: 'domcontentloaded' });
 
     // Search
-    await page.waitForSelector('input[name="search_query"]', { timeout: 60000 });
-    await humanizedType(page, 'input[name="search_query"]', query);
+    await page.waitForSelector('input[name="search_query"]');
+    await humanType(page, 'input[name="search_query"]', `${query} ${channelName}`.trim());
     await page.click('button[aria-label="Search"]');
 
-    await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: 60000 });
+    await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: 90000 });
     await delayFunction(2000);
 
-    // Filter
+    // Filter if any
     if (filterParam) {
+      console.log(`Window ${index+1}: Filter -> ${filterParam}`);
       await page.click('button[aria-label="Search filters"]');
       await delayFunction(2000);
       const newUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}${filterParam}`;
       await page.goto(newUrl, { waitUntil: 'domcontentloaded' });
-      await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: 60000 });
+      await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: 90000 });
     }
 
-    await delayFunction(1500);
+    // scroll
+    await scrollPage(page);
 
-    // If channelName => find that channel
-    if (channelName) {
-      const found = await findAndClickVideoByChannel(page, channelName);
-      if (!found) {
-        throw new Error(`No video found from channel "${channelName}"`);
-      }
-    } else {
-      // click first video
-      const sel = 'ytd-video-renderer #video-title';
-      await page.waitForSelector(sel, { visible: true, timeout: 60000 });
-      const firstVideo = await page.$(sel);
-      if (!firstVideo) {
-        throw new Error('No videos in results');
-      }
-      await firstVideo.click();
-    }
+    // click first result
+    const sel = 'ytd-video-renderer #video-title';
+    await page.waitForSelector(sel, { visible: true, timeout: 90000 });
+    const firstVid = await page.$(sel);
+    await firstVid.click();
 
-    // wait for video
-    await page.waitForSelector('video', { visible: true, timeout: 60000 });
+    // Wait video
+    await page.waitForSelector('video', { visible: true, timeout: 90000 });
 
-    // track video
-    await trackVideoPlayback(page, browser, i, videoPlaySeconds, likeVideo, subscribeChannel);
+    // track playback with like/subscribe
+    await trackVideoPlayback(page, index, browser, likeVideo, subscribeChannel);
 
   } catch (err) {
-    if (browser) await browser.close();
-    throw err; // let the caller handle
+    console.error(`Window ${index+1} error: ${err.message}`);
+    if (browser) {
+      await browser.close();
+      globalStats.activeWindows--;
+    }
   }
 }
 
-// ========== LAUNCH BROWSER (stealth) ==========
-async function launchBrowser(headless, proxy) {
-  const args = [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--window-size=1024,600',
-    '--disable-blink-features=AutomationControlled'
-  ];
-  if (proxy && proxy.ip && proxy.port) {
-    args.push(`--proxy-server=http://${proxy.ip}:${proxy.port}`);
-  }
-  return puppeteer.launch({
-    headless: headless ? 'new' : false, // "new" to reduce detection
-    executablePath: '/usr/bin/chromium-browser', // adjust if needed
-    args
-  });
-}
-
-// ========== trackVideoPlayback ===============
-async function trackVideoPlayback(page, browser, windowIndex, videoPlaySeconds, likeVideo, subscribeChannel) {
-  let startTime = Date.now();
+// trackVideoPlayback + load cookies
+async function trackVideoPlayback(page, index, browser, likeVideo, subscribeChannel) {
+  // Similar to older code, plus random like/subscribe
   let playbackStarted = false;
+  let retries = 0;
+  let lastTime = 0;
+  let currentTime = 0;
   let totalDuration = 0;
-  let reloadCount = 0;
-  let lastTime = 0; // track watch time increments
 
-  // Wait for playback to start
-  while (!playbackStarted) {
-    if (Date.now() - startTime > 45000) {
-      // reload once if not started
-      if (reloadCount < 1) {
+  const startTimeout = 30000;
+
+  while (!playbackStarted && retries < 2) {
+    const startT = Date.now();
+    while (!playbackStarted) {
+      const data = await page.evaluate(() => {
+        const v = document.querySelector('video');
+        if (v && v.duration > 0) {
+          return { currentTime: v.currentTime, totalDuration: v.duration };
+        }
+        return { currentTime: 0, totalDuration: 0 };
+      });
+      currentTime = data.currentTime;
+      totalDuration = data.totalDuration;
+
+      if (currentTime > 0) {
+        playbackStarted = true;
+        console.log(`Window ${index+1}: video started, duration=${totalDuration}`);
+        break;
+      }
+
+      if (Date.now() - startT > startTimeout) {
+        console.log(`Window ${index+1}: no playback, reload #${retries+1}`);
         globalStats.totalRefreshes++;
         await page.reload({ waitUntil: 'domcontentloaded' });
-        reloadCount++;
-        startTime = Date.now();
-      } else {
-        // cannot start
-        await browser.close();
-        return;
+        retries++;
+        break;
       }
-    }
-
-    const data = await page.evaluate(() => {
-      const v = document.querySelector('video');
-      if (!v) return { currentTime: 0, totalDuration: 0 };
-      return { currentTime: v.currentTime, totalDuration: v.duration };
-    });
-    if (data.totalDuration > 0) {
-      playbackStarted = true;
-      totalDuration = data.totalDuration;
-    } else {
-      await delayFunction(3000);
+      await delayFunction(2000);
     }
   }
 
-  // Possibly like / subscribe mid-playback
+  if (!playbackStarted) {
+    console.error(`Window ${index+1}: never started, closing...`);
+    await browser.close();
+    globalStats.activeWindows--;
+    return;
+  }
+
+  // Possibly do like/subscribe after some random time
   if (likeVideo) {
-    // do it after 25% of the video
-    randomlyLikeVideo(page, totalDuration).catch(() => {});
+    // do it around 25% of totalDuration
+    randomLikeDuringPlayback(page, totalDuration).catch(() => {});
   }
   if (subscribeChannel) {
-    subscribeToChannelDuringPlayback(page, totalDuration).catch(() => {});
+    // do it around 40% of totalDuration
+    randomSubscribeDuringPlayback(page, totalDuration).catch(() => {});
   }
 
   let stuckTime = 0;
-  let reloadedForStuck = false;
-  startTime = Date.now();
-
   while (true) {
     const data = await page.evaluate(() => {
       const v = document.querySelector('video');
-      if (!v) return { currentTime: 0, totalDuration: 0 };
-      return { currentTime: v.currentTime, totalDuration: v.duration };
+      return v
+        ? { currentTime: v.currentTime, totalDuration: v.duration }
+        : { currentTime: 0, totalDuration: 0 };
     });
-    const currTime = data.currentTime;
-    const dur = data.totalDuration;
+    currentTime = data.currentTime;
+    totalDuration = data.totalDuration;
 
-    // accumulate watch time
-    if (currTime >= lastTime) {
-      // add difference
-      const diff = currTime - lastTime;
-      if (diff > 0) globalStats.totalWatchTimeSec += diff;
-      lastTime = currTime;
+    // watch time
+    const diff = currentTime - lastTime;
+    if (diff > 0) {
+      globalStats.totalWatchTime += diff;
+      lastTime = currentTime;
     }
 
-    // (1) if currentTime >= videoPlaySeconds => done
-    if (currTime >= videoPlaySeconds) {
-      // consider it a full view
+    console.log(`Window ${index+1}: ${currentTime.toFixed(1)}/${totalDuration.toFixed(1)}`);
+
+    if (totalDuration > 0 && totalDuration - currentTime < 10) {
       globalStats.totalViews++;
+      console.log(`Window ${index+1}: near end => close`);
       await browser.close();
+      globalStats.activeWindows--;
       return;
     }
 
-    // (2) if near end
-    if (dur > 0 && dur - currTime <= 10) {
-      globalStats.totalViews++;
-      await browser.close();
-      return;
+    // random pause
+    if (Math.random() < 0.15) {
+      console.log(`Window ${index+1}: pause`);
+      await page.evaluate(() => {
+        const v = document.querySelector('video');
+        if (v) v.pause();
+      });
+      await delayFunction(Math.random()*3000+2000);
+      console.log(`Window ${index+1}: resume`);
+      await page.evaluate(() => {
+        const v = document.querySelector('video');
+        if (v) v.play();
+      });
     }
 
-    // (3) stuck detection
-    if (currTime === lastTime) {
-      stuckTime += 3;
-      if (stuckTime > 15) {
-        if (!reloadedForStuck) {
-          globalStats.totalRefreshes++;
-          await page.reload({ waitUntil: 'domcontentloaded' });
-          reloadedForStuck = true;
-          stuckTime = 0;
-          lastTime = 0;
-          continue;
-        } else {
-          // fail
-          await browser.close();
-          return;
-        }
-      }
-    } else {
-      stuckTime = 0;
+    // random seek
+    if (Math.random() < 0.1) {
+      const sec = Math.random()*10;
+      const direction = Math.random()>0.5 ? 1 : -1;
+      const newT = Math.max(0, Math.min(currentTime+direction*sec, totalDuration));
+      console.log(`Window ${index+1}: seeking => ${newT.toFixed(1)}`);
+      await page.evaluate(t => {
+        const v = document.querySelector('video');
+        if (v) v.currentTime = t;
+      }, newT);
     }
 
-    // random pause/resume, random seek if you want, etc.
+    // random scroll
+    if (Math.random() < 0.2) {
+      await scrollPage(page);
+    }
+
+    // stuck detection
     await delayFunction(3000);
   }
 }
 
-// ========== Minor Utility Functions ==========
-
-function delayFunction(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function findAndClickVideoByChannel(page, channelName) {
-  for (let scrollCount = 0; scrollCount < 5; scrollCount++) {
-    const videos = await page.$$('ytd-video-renderer');
-    for (const vid of videos) {
-      const channelEl = await vid.$('ytd-channel-name');
-      if (!channelEl) continue;
-      const channelText = (await channelEl.evaluate(el => el.textContent.trim())).toLowerCase();
-      if (channelText.includes(channelName.toLowerCase())) {
-        const title = await vid.$('#video-title');
-        if (title) {
-          await title.click();
-          return true;
+// randomLikeDuringPlayback
+async function randomLikeDuringPlayback(page, totalDuration) {
+  const triggerTime = totalDuration/4; // ~25%
+  while (true) {
+    const data = await page.evaluate(() => {
+      const v = document.querySelector('video');
+      if (v) return v.currentTime;
+      return 0;
+    });
+    if (data >= triggerTime) {
+      console.log(`Attempting like...`);
+      await page.evaluate(() => {
+        const likeBtn = document.querySelector('button[aria-label*="like this video"]');
+        if (likeBtn && likeBtn.getAttribute('aria-pressed') !== 'true') {
+          likeBtn.click();
         }
-      }
+      });
+      return;
     }
-    await page.evaluate(() => window.scrollBy(0, 1000));
     await delayFunction(2000);
   }
-  return false;
 }
 
-// You already have randomlyLikeVideo, subscribeToChannelDuringPlayback, etc. in code above
-async function randomlyLikeVideo(page, totalDuration) { /* ... omitted for brevity ... */ }
-async function subscribeToChannelDuringPlayback(page, totalDuration) { /* ... omitted ... */ }
+// randomSubscribeDuringPlayback
+async function randomSubscribeDuringPlayback(page, totalDuration) {
+  const triggerTime = totalDuration * 0.4; // 40%
+  while (true) {
+    const data = await page.evaluate(() => {
+      const v = document.querySelector('video');
+      if (v) return v.currentTime;
+      return 0;
+    });
+    if (data >= triggerTime) {
+      console.log(`Attempting subscribe...`);
+      await page.evaluate(() => {
+        const subBtn = document.querySelector('ytd-subscribe-button-renderer button');
+        if (subBtn) {
+          // check if already subscribed
+          if (!subBtn.textContent.toLowerCase().includes('subscribed')) {
+            subBtn.click();
+          }
+        }
+      });
+      return;
+    }
+    await delayFunction(2000);
+  }
+}
 
-async function humanizedType(page, selector, text) {
+// scroll
+async function scrollPage(page) {
+  await delayFunction(2000);
+  const scrollHeight = await page.evaluate(() => document.body.scrollHeight);
+  const randomY = Math.floor(Math.random()*(scrollHeight/2))+100;
+  await page.evaluate(y => window.scrollTo(0,y), randomY);
+  await delayFunction(2500);
+  await page.evaluate(() => window.scrollTo(0,0));
+  await delayFunction(2000);
+}
+
+// typed
+async function humanType(page, selector, text) {
   const el = await page.$(selector);
   if (!el) return;
-  for (let i = 0; i < text.length; i++) {
+  for (let i=0; i<text.length; i++) {
     await el.type(text.charAt(i));
-    const delayMs = Math.floor(Math.random() * 50) + 50; // 50-100ms
-    await delayFunction(delayMs);
+    await delayFunction(Math.random()*50+50);
   }
 }

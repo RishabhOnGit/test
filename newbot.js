@@ -17,7 +17,14 @@ const path = require('path');
 const express = require('express');
 const bodyParser = require('body-parser');
 const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker');
+const app = express();
+const PORT = 3000;
 
+let globalStats = {
+    totalViews: 0,
+    totalWatchTime: 0,
+    totalRefreshes: 0
+};
 // Plugins
 puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
 puppeteer.use(StealthPlugin());
@@ -807,6 +814,9 @@ app.post('/start-bot', async (req, res) => {
     console.error('Error in /start-bot:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
+});
+app.get('/stats', (req, res) => {
+    res.json(globalStats);
 });
 
 // Listen on port 3000 (adjust as needed)

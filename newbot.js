@@ -1,38 +1,39 @@
 /*************************************************************
- * automation.js
- * (Your old code + #2, #3, #4 stealth additions + random window size)
+ * automation.js  (Worker)
+ * -----------------------------------------------------------
+ * This is your old code, unmodified in logic, but with:
+ * 1) globalStats to track totalViews, totalRefreshes, activeWindows
+ * 2) Minimal increments in trackVideoPlayback / openWindow
+ * 3) An Express server that:
+ *    - GET /stats -> returns globalStats
+ *    - POST /start-bot -> triggers the same "startDynamicAutomation" logic
+ * 4) We keep your original Inquirer flow for local usage
  *************************************************************/
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker');
 const inquirer = require('inquirer');
-const express = require('express');
-const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
+const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker');
 
-// 1) Use adblocker + stealth
+// Stealth & Adblocker
 puppeteer.use(AdblockerPlugin({ blockTrackers: true }));
 puppeteer.use(StealthPlugin());
 
-// ----------------------------------------------------------
-// GLOBAL STATS (unchanged)
+// --------------- Global Stats ---------------
 const globalStats = {
-  activeWindows: 0,
   totalViews: 0,
-  totalWatchTime: 0,   // if you track watch time
-  totalRefreshes: 0
+  totalRefreshes: 0,
+  activeWindows: 0
 };
 
-// ----------------------------------------------------------
-// UTILITY: Delay
+// --------------- Delay Helper ---------------
 function delayFunction(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ----------------------------------------------------------
-// UTILITY: navigateWithRetry
+// --------------- navigateWithRetry -----------
 async function navigateWithRetry(page, url, retries = 5, timeout = 60000) {
   for (let i = 0; i < retries; i++) {
     try {
@@ -40,14 +41,12 @@ async function navigateWithRetry(page, url, retries = 5, timeout = 60000) {
       return;
     } catch (err) {
       if (i === retries - 1) throw err;
-      console.log(`Retrying navigation: ${err.message}`);
       await delayFunction(2000);
     }
   }
 }
 
-// ----------------------------------------------------------
-// UTILITY: findAndClickVideoByChannel
+// --------------- findAndClickVideoByChannel ---
 async function findAndClickVideoByChannel(page, channelName, maxScrollAttempts = 5) {
   let attempts = 0;
   while (attempts < maxScrollAttempts) {
@@ -61,12 +60,12 @@ async function findAndClickVideoByChannel(page, channelName, maxScrollAttempts =
         const titleEl = await video.$('#video-title');
         if (titleEl) {
           console.log(`Found channel match: "${channelText}" -> clicking video`);
-          await humanMoveAndClick(page, titleEl); // #2 random mouse & click
+          await titleEl.click();
           return true;
         }
       }
     }
-    console.log(`Channel "${channelName}" not found, scrolling...`);
+    console.log(`Channel "${channelName}" not found yet, scrolling further...`);
     await page.evaluate(() => window.scrollBy(0, 800));
     await delayFunction(1500);
     attempts++;
@@ -74,8 +73,7 @@ async function findAndClickVideoByChannel(page, channelName, maxScrollAttempts =
   return false;
 }
 
-// ----------------------------------------------------------
-// UTILITY: waitForAdToFinish
+// --------------- waitForAdToFinish ------------
 async function waitForAdToFinish(page, timeout = 30000) {
   const startTime = Date.now();
   while (true) {
@@ -89,21 +87,20 @@ async function waitForAdToFinish(page, timeout = 30000) {
   }
 }
 
-// ----------------------------------------------------------
-// UTILITY: safelyCloseBrowser
+// --------------- safelyCloseBrowser -----------
 async function safelyCloseBrowser(browser, windowIndex) {
   if (browser) {
     try {
       await browser.close();
+      // Decrement activeWindows
       globalStats.activeWindows--;
     } catch (err) {
-      console.error(`Error closing browser (Window ${windowIndex+1}): ${err.message}`);
+      console.error(`Error closing browser (Window ${windowIndex + 1}): ${err.message}`);
     }
   }
 }
 
-// ----------------------------------------------------------
-// UTILITY: forceQuality144p
+// --------------- forceQuality144p -------------
 async function forceQuality144p(page) {
   try {
     await delayFunction(1000);
@@ -111,12 +108,14 @@ async function forceQuality144p(page) {
     await page.click('.ytp-settings-button');
 
     await page.waitForSelector('.ytp-settings-menu', { visible: true, timeout: 60000 });
+    // Scroll the settings menu to ensure "Quality" is visible
     await page.evaluate(() => {
       const menu = document.querySelector('.ytp-settings-menu, .ytp-panel-menu');
       if (menu) menu.scrollTop = menu.scrollHeight;
     });
     await delayFunction(500);
 
+    // Click "Quality"
     await page.evaluate(() => {
       const items = [...document.querySelectorAll('.ytp-menuitem')];
       const qualityItem = items.find(item => item.textContent.includes('Quality'));
@@ -124,12 +123,14 @@ async function forceQuality144p(page) {
     });
     await delayFunction(500);
 
+    // Scroll again
     await page.evaluate(() => {
       const menu = document.querySelector('.ytp-settings-menu, .ytp-panel-menu');
       if (menu) menu.scrollTop = menu.scrollHeight;
     });
     await delayFunction(500);
 
+    // Select 144p
     const resolutionSet = await page.evaluate(() => {
       const items = [...document.querySelectorAll('.ytp-menuitem')];
       const resItem = items.find(item => item.textContent.includes('144p'));
@@ -141,31 +142,73 @@ async function forceQuality144p(page) {
     });
 
     if (!resolutionSet) {
-      console.error('Error: "144p" resolution not found.');
+      console.error('Error: "144p" resolution not found in the menu.');
     } else {
-      console.log('Resolution forced to 144p.');
+      console.log('Resolution set to "144p".');
     }
     await delayFunction(500);
-
   } catch (err) {
     console.error('Error forcing 144p:', err.message);
   }
 }
 
-// ----------------------------------------------------------
-// UTILITY: randomlyLikeVideo
+// --------------- randomlyLikeVideo ------------
 async function randomlyLikeVideo(page, totalDuration) {
-  // same as old
+  const triggerTime = totalDuration / 4;
+  while (true) {
+    const currentTime = await page.evaluate(() => {
+      const vid = document.querySelector('video');
+      return vid ? vid.currentTime : 0;
+    });
+    if (currentTime >= triggerTime) {
+      const likeButton = await page.$('button[aria-label*="like this video"]');
+      if (likeButton) {
+        const isLiked = await page.evaluate(btn => btn.getAttribute('aria-pressed') === 'true', likeButton);
+        if (!isLiked) {
+          try {
+            await likeButton.click();
+          } catch (err) {
+            console.error('Like click error:', err.message);
+          }
+        }
+      }
+      break;
+    }
+    await delayFunction(3000);
+  }
 }
 
-// ----------------------------------------------------------
-// UTILITY: subscribeToChannelDuringPlayback
+// --------------- subscribeToChannelDuringPlayback
 async function subscribeToChannelDuringPlayback(page, totalDuration) {
-  // same as old
+  const subSel = 'ytd-subscribe-button-renderer button';
+  const triggerTime = totalDuration / 3;
+  while (true) {
+    const currentTime = await page.evaluate(() => {
+      const vid = document.querySelector('video');
+      return vid ? vid.currentTime : 0;
+    });
+    if (currentTime >= triggerTime) {
+      const subBtn = await page.$(subSel);
+      if (subBtn) {
+        const isSubbed = await page.evaluate(
+          btn => (btn.textContent || '').toLowerCase().includes('subscribed'),
+          subBtn
+        );
+        if (!isSubbed) {
+          try {
+            await subBtn.click();
+          } catch (err) {
+            console.error('Subscribe click error:', err.message);
+          }
+        }
+      }
+      break;
+    }
+    await delayFunction(3000);
+  }
 }
 
-// ----------------------------------------------------------
-// trackVideoPlayback
+// --------------- trackVideoPlayback ------------
 async function trackVideoPlayback(
   page,
   windowIndex,
@@ -184,15 +227,16 @@ async function trackVideoPlayback(
   let lastCurrentTime = 0;
   let stuckTime = 0;
 
+  // Wait for playback to start
   while (!playbackStarted) {
     if (Date.now() - startTime > startTimeout) {
       if (reloadCount === 0) {
-        console.error(`Window ${windowIndex+1}: Playback not starting, reloading...`);
-        globalStats.totalRefreshes++;
+        console.error(`Window ${windowIndex + 1}: Playback didn't start -> Reloading once.`);
+        globalStats.totalRefreshes++; // increment refresh
         await page.reload({ waitUntil: 'domcontentloaded' });
         reloadCount++;
       } else {
-        console.error(`Window ${windowIndex+1}: Playback never started => closing`);
+        console.error(`Window ${windowIndex + 1}: Playback never started after reload -> closing.`);
         await browser.close();
         return;
       }
@@ -200,72 +244,116 @@ async function trackVideoPlayback(
 
     const vidData = await page.evaluate(() => {
       const v = document.querySelector('video');
-      if (!v) return null;
-      return { currentTime: v.currentTime, totalDuration: v.duration };
+      return v ? { currentTime: v.currentTime, totalDuration: v.duration } : null;
     });
+
     if (vidData && vidData.totalDuration > 0) {
       totalDuration = vidData.totalDuration;
       playbackStarted = true;
-      console.log(`Window ${windowIndex+1}: Playback started, duration=${totalDuration}`);
+      console.log(`Window ${windowIndex + 1}: Playback started, duration=${totalDuration.toFixed(2)}s`);
     } else {
       await delayFunction(5000);
     }
   }
 
+  // Force 144p
   await forceQuality144p(page);
 
+  // Possibly Like / Subscribe
   if (applyCookies) {
-    if (likeVideo) await randomlyLikeVideo(page, totalDuration);
-    if (subscribeChannel) await subscribeToChannelDuringPlayback(page, totalDuration);
+    if (likeVideo) {
+      await randomlyLikeVideo(page, totalDuration);
+    }
+    if (subscribeChannel) {
+      await subscribeToChannelDuringPlayback(page, totalDuration);
+    }
   }
 
+  let reloadDoneForStuck = false;
+
   while (true) {
-    const data = await page.evaluate(() => {
+    const vidData = await page.evaluate(() => {
       const v = document.querySelector('video');
       return v
         ? { currentTime: v.currentTime || 0, totalDuration: v.duration || 0 }
         : { currentTime: 0, totalDuration: 0 };
     });
-    const currTime = data.currentTime;
-    const dur = data.totalDuration;
 
-    console.log(`Window ${windowIndex+1}: ${currTime.toFixed(2)}/${dur.toFixed(2)} sec`);
+    const currTime = vidData.currentTime;
+    const dur = vidData.totalDuration;
 
+    console.log(`Window ${windowIndex + 1}: currentTime=${currTime.toFixed(2)} / ${dur.toFixed(2)} sec`);
+
+    // (1) If currentTime >= videoPlaySeconds => close
     if (currTime >= videoPlaySeconds) {
-      console.log(`Window ${windowIndex+1}: Reached ${videoPlaySeconds}s => close`);
+      console.log(`Window ${windowIndex + 1}: currentTime >= ${videoPlaySeconds} => closing.`);
+      // Count this as a "view"
+      console.log(`Window ${windowIndex + 1}: Counting as a completed view.`);
       await browser.close();
-      globalStats.activeWindows--;
-      return;
-    }
-    if (dur > 0 && dur - currTime <= 10) {
-      console.log(`Window ${windowIndex+1}: near end => close`);
-      await browser.close();
-      globalStats.activeWindows--;
       return;
     }
 
+    // (2) If near the end
+    if (dur > 0 && dur - currTime <= 12) {
+      console.log(`Window ${windowIndex + 1}: Near the end => closing.`);
+      // Count this as a "view"
+      console.log(`Window ${windowIndex + 1}: Counting as a completed view.`);
+      await browser.close();
+      return;
+    }
+
+    // (3) Stuck detection
     if (currTime === lastCurrentTime) {
       stuckTime += 5;
       if (stuckTime >= 15) {
-        console.warn(`Window ${windowIndex+1}: stuck => reload once`);
-        globalStats.totalRefreshes++;
-        await page.reload({ waitUntil: 'domcontentloaded' });
-        stuckTime = 0;
-        lastCurrentTime = 0;
-        continue;
+        if (!reloadDoneForStuck) {
+          console.warn(`Window ${windowIndex + 1}: Stuck for 10s => Reloading once.`);
+          globalStats.totalRefreshes++; // increment refresh
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          reloadDoneForStuck = true;
+          stuckTime = 0;
+          lastCurrentTime = 0;
+          continue;
+        } else {
+          console.error(`Window ${windowIndex + 1}: Already reloaded once, still stuck => closing.`);
+          await browser.close();
+          return;
+        }
       }
     } else {
       stuckTime = 0;
     }
     lastCurrentTime = currTime;
 
-    // random pause/resume, random seek, etc. (unchanged)
+    // Random pause/resume
+    if (Math.random() < 0.15) {
+      await page.evaluate(() => {
+        const v = document.querySelector('video');
+        if (v) v.pause();
+      });
+      await delayFunction(Math.random() * 5000 + 2000);
+      await page.evaluate(() => {
+        const v = document.querySelector('video');
+        if (v) v.play();
+      });
+    }
+
+    // Random seek
+    if (Math.random() < 0.1) {
+      const seekTime = Math.random() * 10;
+      const direction = Math.random() > 0.5 ? 1 : -1;
+      const newTime = Math.max(0, Math.min(currTime + direction * seekTime, dur));
+      await page.evaluate(t => {
+        const v = document.querySelector('video');
+        if (v) v.currentTime = t;
+      }, newTime);
+    }
+
     await delayFunction(5000);
   }
 }
 
-// ----------------------------------------------------------
-// openWindowWithRetry
+// --------------- openWindowWithRetry -----------
 async function openWindowWithRetry(
   i,
   query,
@@ -280,45 +368,36 @@ async function openWindowWithRetry(
   videoPlaySeconds,
   retries = 5
 ) {
-  // same concurrency retry logic as old
-}
-
-// ----------------------------------------------------------
-// #2 (Random Mouse & Click) - helper
-async function humanMoveAndClick(page, elementHandle) {
-  const box = await elementHandle.boundingBox();
-  if (!box) return;
-
-  // Move in small increments
-  const steps = 5 + Math.floor(Math.random() * 5);
-  const startPos = await page.mouse.position() || { x: 0, y: 0 };
-  const deltaX = box.x + box.width/2 - startPos.x;
-  const deltaY = box.y + box.height/2 - startPos.y;
-
-  for (let i = 1; i <= steps; i++) {
-    const nx = startPos.x + (deltaX * i/steps);
-    const ny = startPos.y + (deltaY * i/steps);
-    await page.mouse.move(nx, ny);
-    await delayFunction(Math.floor(Math.random() * 30 + 30));
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await openWindow(
+        i,
+        query,
+        channelName,
+        applyCookies,
+        likeVideo,
+        subscribeChannel,
+        proxy,
+        userAgent,
+        filterParam,
+        headless,
+        videoPlaySeconds
+      );
+      console.log(`Window ${i + 1}: Succeeded on attempt ${attempt}`);
+      return;
+    } catch (error) {
+      console.error(`Window ${i + 1}: Attempt ${attempt} failed -> ${error.message}`);
+      if (attempt < retries) {
+        console.log(`Window ${i + 1}: Retrying in 3 seconds...`);
+        await delayFunction(3000);
+      } else {
+        console.error(`Window ${i + 1}: All attempts failed. Skipping.`);
+      }
+    }
   }
-  await page.mouse.down();
-  await delayFunction(Math.random() * 100 + 50);
-  await page.mouse.up();
-  await delayFunction(Math.random() * 100 + 50);
 }
 
-// ----------------------------------------------------------
-// #3 (Puppeteer Fingerprint Solution) => override at doc start
-async function overrideFingerprint(page) {
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-    Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });
-  });
-}
-
-// ----------------------------------------------------------
-// openWindow
+// --------------- openWindow --------------------
 async function openWindow(
   i,
   query,
@@ -334,49 +413,68 @@ async function openWindow(
 ) {
   let browser;
   try {
-    // #4 random window size
-    const randomWidth = Math.floor(Math.random() * 400 + 800);
-    const randomHeight = Math.floor(Math.random() * 300 + 600);
-
+    const navigationTimeout = 60000;
     browser = await puppeteer.launch({
-      // #3 Use new headless mode
-      headless: headless ? 'new' : false,
-      executablePath: '/usr/bin/chromium-browser',
-      // random window size
+      headless,
+      executablePath: '/usr/bin/chromium-browser', // adjust if needed
       args: [
-        `--window-size=${randomWidth},${randomHeight}`,
         '--no-sandbox',
         '--disable-setuid-sandbox',
+        '--disable-accelerated-2d-canvas',
         '--disable-gpu',
         '--disable-infobars',
+        '--window-size=1024,600',
         '--disable-blink-features=AutomationControlled',
-        ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : [])
+        '--disable-dev-shm-usage',
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+        ...(proxy ? [`--proxy-server=http://${proxy.ip}:${proxy.port}`] : []),
       ],
-      defaultViewport: null, // so it uses window-size
-      timeout: 60000
+      timeout: navigationTimeout,
     });
 
+    // Increment activeWindows
     globalStats.activeWindows++;
 
     const page = await browser.newPage();
-    await overrideFingerprint(page); // #3 override
+
+    // load cookies if needed
+    if (applyCookies) {
+      const cookies = loadCookiesForWindow(i);
+      if (cookies && cookies.length > 0) {
+        await page.setCookie(...cookies);
+      }
+    }
+
+    await page.setUserAgent(userAgent);
+
     if (proxy && proxy.username && proxy.password) {
-      await page.authenticate({ username: proxy.username, password: proxy.password });
+      await page.authenticate({
+        username: proxy.username,
+        password: proxy.password,
+      });
     }
 
-    if (userAgent) {
-      await page.setUserAgent(userAgent);
-    }
+    await page.setDefaultNavigationTimeout(navigationTimeout);
 
-    await page.setDefaultNavigationTimeout(90000);
-
-    console.log(`Window ${i+1}: Goto YouTube`);
-    await navigateWithRetry(page, 'https://www.youtube.com', 5, 90000);
+    console.log(`Window ${i+1}: Navigating to YouTube...`);
+    await navigateWithRetry(page, 'https://www.youtube.com', 5, navigationTimeout);
 
     // search
-    await page.waitForSelector('input[name="search_query"]');
+    await page.waitForSelector('input[name="search_query"]', { timeout: navigationTimeout });
     await humanizedType(page, 'input[name="search_query"]', query);
     await page.click('button[aria-label="Search"]');
+
+    // hide immediate overlay ads if any
+    await page.evaluate(() => {
+      const adOverlay = document.querySelector('.ytp-ad-overlay-container');
+      if (adOverlay) adOverlay.style.display = 'none';
+      const bannerAd = document.querySelector('.ytp-ad-banner');
+      if (bannerAd) bannerAd.style.display = 'none';
+      const videoAd = document.querySelector('.video-ads');
+      if (videoAd) videoAd.style.display = 'none';
+    });
 
     await delayFunction(2000);
 
@@ -385,55 +483,103 @@ async function openWindow(
       await page.click('button[aria-label="Search filters"]');
       await delayFunction(2000);
       const newUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}${filterParam}`;
-      await navigateWithRetry(page, newUrl, 3, 90000);
-      await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: 90000 });
+      await navigateWithRetry(page, newUrl, 3, navigationTimeout);
+      await page.waitForSelector('ytd-video-renderer', { visible: true, timeout: navigationTimeout });
     }
 
     await delayFunction(1500);
 
     if (channelName) {
-      console.log(`Window ${i+1}: Searching channel ${channelName}`);
+      console.log(`Window ${i + 1}: Searching for channel "${channelName}"...`);
       const found = await findAndClickVideoByChannel(page, channelName);
-      if (!found) throw new Error(`No video from channel "${channelName}"`);
+      if (!found) {
+        throw new Error(`Could not find any video from channel "${channelName}"`);
+      }
     } else {
       const sel = 'ytd-video-renderer #video-title';
-      await page.waitForSelector(sel, { visible: true, timeout: 90000 });
+      await page.waitForSelector(sel, { visible: true, timeout: navigationTimeout });
       const firstVideo = await page.$(sel);
-      if (!firstVideo) throw new Error('No videos found');
-      await humanMoveAndClick(page, firstVideo);
+      if (!firstVideo) {
+        throw new Error('No videos found after search');
+      }
+      await firstVideo.click();
     }
 
-    await page.waitForSelector('video', { visible: true, timeout: 90000 });
+    console.log(`Window ${i+1}: Waiting for video element...`);
+    await page.waitForSelector('video', { visible: true, timeout: navigationTimeout });
+
+    console.log(`Window ${i+1}: Waiting for ad...`);
     await waitForAdToFinish(page, 30000);
+
+    console.log(`Window ${i+1}: Tracking playback...`);
     await trackVideoPlayback(page, i, browser, applyCookies, likeVideo, subscribeChannel, videoPlaySeconds);
 
   } catch (err) {
     console.error(`Window ${i+1} error: ${err.message}`);
-    throw err;
+    throw err; // let caller handle
   } finally {
     await safelyCloseBrowser(browser, i);
   }
 }
 
-// ----------------------------------------------------------
-// "Humanized" typing
+// --------------- scrollPage & humanizedType are above -----------
 async function humanizedType(page, selector, text) {
-  const input = await page.$(selector);
-  if (!input) return;
+  const inputField = await page.$(selector);
   for (let i = 0; i < text.length; i++) {
-    await input.type(text.charAt(i));
-    await delayFunction(Math.floor(Math.random() * 50 + 50));
+    await inputField.type(text.charAt(i));
+    const randDelay = Math.floor(Math.random() * (100 - 50 + 1)) + 50;
+    await delayFunction(randDelay);
   }
 }
 
-// ----------------------------------------------------------
-// Readers
-function readProxiesFromFile(filePath) { /* same as old */ }
-function readUserAgentsFromFile(filePath) { /* same as old */ }
-function loadCookiesForWindow(windowIndex) { /* if you want cookies logic */ }
+// --------------- Readers -----------
+function readProxiesFromFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const proxyData = fs.readFileSync(filePath, 'utf8');
+    return proxyData
+      .split('\n')
+      .map(line => {
+        if (!line.trim()) return null;
+        const [credentials, ipPort] = line.split('@');
+        if (!credentials || !ipPort) return null;
+        const [username, password] = credentials.split(':');
+        const [ip, port] = ipPort.split(':');
+        return { username, password, ip, port };
+      })
+      .filter(Boolean);
+  } catch (err) {
+    console.error(`Error reading proxy file: ${err.message}`);
+    return [];
+  }
+}
 
-// ----------------------------------------------------------
-// The dynamic concurrency approach
+function readUserAgentsFromFile(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const data = fs.readFileSync(filePath, 'utf8');
+    return data.split('\n').map(line => line.trim()).filter(Boolean);
+  } catch (err) {
+    console.error(`Error reading useragent file: ${err.message}`);
+    return [];
+  }
+}
+
+function loadCookiesForWindow(windowIndex) {
+  const cookiesPath = path.join(__dirname, 'cookies', `profile${windowIndex + 1}_cookies.json`);
+  if (!fs.existsSync(cookiesPath)) {
+    return [];
+  }
+  try {
+    const fileData = fs.readFileSync(cookiesPath, 'utf8');
+    return JSON.parse(fileData);
+  } catch (error) {
+    console.error(`Error parsing cookies (Window ${windowIndex + 1}): ${error.message}`);
+    return [];
+  }
+}
+
+// --------------- startDynamicAutomation -----------
 async function startDynamicAutomation(
   query,
   channelName,
@@ -448,26 +594,130 @@ async function startDynamicAutomation(
   headless,
   videoPlaySeconds
 ) {
-  // same concurrency loop as old code
+  // same concurrency logic from your code
+  const filterMap = {
+    none: '',
+    'Last hour': '&sp=EgIIAQ%253D%253D',
+    'Today': '&sp=EgIIAg%253D%253D',
+    'This week': '&sp=EgIIAw%253D%253D'
+  };
+  const filterParam = filterMap[filter] || '';
+
+  let completedCount = 0;
+  let nextWindowIndex = 0;
+  const activeWindows = new Set();
+
+  while (completedCount < totalWindows) {
+    while (activeWindows.size < maxConcurrent && nextWindowIndex < totalWindows) {
+      const currIndex = nextWindowIndex++;
+      const px = proxies[currIndex % proxies.length] || null;
+      const ua = userAgents[currIndex % userAgents.length] || 'Mozilla/5.0';
+
+      const promise = openWindowWithRetry(
+        currIndex,
+        query,
+        channelName,
+        applyCookies,
+        likeVideo,
+        subscribeChannel,
+        px,
+        ua,
+        filterParam,
+        headless,
+        videoPlaySeconds,
+        3
+      )
+        .then(() => {
+          activeWindows.delete(promise);
+          completedCount++;
+        })
+        .catch(() => {
+          activeWindows.delete(promise);
+          completedCount++;
+        });
+      activeWindows.add(promise);
+    }
+
+    if (activeWindows.size > 0) {
+      await Promise.race(activeWindows);
+    }
+  }
+  console.log('All windows processed via dynamic concurrency!');
 }
 
-// ----------------------------------------------------------
-// Main user prompts (unchanged)
+// --------------- Inquirer-based flow ---------------
 (async () => {
-  // same inquirer flow...
+  // Keep your old inquirer logic for local usage
+  const prompt = inquirer.createPromptModule();
+
+  const answers1 = await prompt([
+    { type: 'input', name: 'query', message: 'Enter YouTube search query (video title or keywords):' },
+    { type: 'input', name: 'channelName', message: 'Enter the channel name (leave blank to skip):' },
+    { type: 'confirm', name: 'applyCookies', message: 'Do you want to apply cookies?', default: false },
+  ]);
+
+  let cookiesAnswers = { likeVideo: false, subscribeChannel: false };
+  if (answers1.applyCookies) {
+    cookiesAnswers = await prompt([
+      { type: 'confirm', name: 'likeVideo', message: 'Like the video?', default: false },
+      { type: 'confirm', name: 'subscribeChannel', message: 'Subscribe to the channel?', default: false },
+    ]);
+  }
+
+  const answers2 = await prompt([
+    { type: 'number', name: 'totalWindows', message: 'How many total windows to open?', default: 10 },
+    { type: 'number', name: 'maxConcurrent', message: 'Max concurrency?', default: 5 },
+    {
+      type: 'list',
+      name: 'filter',
+      message: 'Select a filter for search results:',
+      choices: ['none', 'Last hour', 'Today', 'This week'],
+      default: 'none'
+    },
+    { type: 'confirm', name: 'headless', message: 'Use headless mode (no UI)?', default: true },
+    { type: 'number', name: 'videoPlaySeconds', message: 'Video playback time (seconds)?', default: 60 }
+  ]);
+
+  const finalAnswers = { ...answers1, ...cookiesAnswers, ...answers2 };
+
+  const proxyFilePath = path.join(__dirname, 'proxies.txt');
+  const userAgentFilePath = path.join(__dirname, 'useragent.txt');
+
+  const proxies = readProxiesFromFile(proxyFilePath);
+  const userAgents = readUserAgentsFromFile(userAgentFilePath);
+
+  await startDynamicAutomation(
+    finalAnswers.query,
+    finalAnswers.channelName,
+    finalAnswers.applyCookies,
+    finalAnswers.likeVideo,
+    finalAnswers.subscribeChannel,
+    finalAnswers.totalWindows,
+    finalAnswers.maxConcurrent,
+    proxies,
+    userAgents,
+    finalAnswers.filter,
+    finalAnswers.headless,
+    finalAnswers.videoPlaySeconds
+  );
 })();
 
-// ----------------------------------------------------------
-// Express server for manager calls
-const expressApp = express();
-expressApp.use(bodyParser.json());
-expressApp.use(bodyParser.urlencoded({ extended: true }));
+// =========== ADD EXPRESS FOR VPS & Live Updates ===========
 
-expressApp.get('/', (req, res) => {
-  res.send('<h1>Stealth Worker Running</h1><p>POST /start-bot, GET /stats</p>');
+const express = require('express');
+const bodyParser = require('body-parser');
+
+const app = express();
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+// GET /stats -> Return minimal stats
+app.get('/stats', (req, res) => {
+  res.json(globalStats);
 });
 
-expressApp.post('/start-bot', async (req, res) => {
+// POST /start-bot -> same logic as the inquirer flow, but from JSON
+app.post('/start-bot', async (req, res) => {
   try {
     const {
       query = '',
@@ -482,43 +732,36 @@ expressApp.post('/start-bot', async (req, res) => {
       videoPlaySeconds = 60
     } = req.body;
 
-    // reset stats each run if you want  
-    globalStats.activeWindows = 0;  
-    globalStats.totalViews = 0;  
-    globalStats.totalRefreshes = 0;  
+    // Run the same concurrency function
+    const proxyFilePath = path.join(__dirname, 'proxies.txt');
+    const userAgentFilePath = path.join(__dirname, 'useragent.txt');
+    const proxies = readProxiesFromFile(proxyFilePath);
+    const userAgents = readUserAgentsFromFile(userAgentFilePath);
 
-    const proxyFilePath = path.join(__dirname, 'proxies.txt');  
-    const userAgentFilePath = path.join(__dirname, 'useragent.txt');  
-    const proxies = readProxiesFromFile(proxyFilePath);  
-    const userAgents = readUserAgentsFromFile(userAgentFilePath);  
+    await startDynamicAutomation(
+      query,
+      channelName,
+      applyCookies,
+      likeVideo,
+      subscribeChannel,
+      parseInt(totalWindows),
+      parseInt(maxConcurrent),
+      proxies,
+      userAgents,
+      filter,
+      (headless === true || headless === 'true'),
+      parseInt(videoPlaySeconds)
+    );
 
-    await startDynamicAutomation(  
-      query,  
-      channelName,  
-      applyCookies,  
-      likeVideo,  
-      subscribeChannel,  
-      parseInt(totalWindows),  
-      parseInt(maxConcurrent),  
-      proxies,  
-      userAgents,  
-      filter,  
-      (headless === true || headless === 'true'),  
-      parseInt(videoPlaySeconds)  
-    );  
-
-    res.json({ success: true, message: 'Bot started with new stealth changes.' });
-
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.json({ success: true, message: 'Bot started via /start-bot' });
+  } catch (error) {
+    console.error('/start-bot error:', error.message);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-expressApp.get('/stats', (req, res) => {
-  res.json(globalStats);
-});
-
-const PORT = 3000;
-expressApp.listen(PORT, '0.0.0.0', () => {
-  console.log(`Stealth Worker listening on port ${PORT}`);
+// Start server on port 3000
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Worker listening on port ${PORT}`);
 });

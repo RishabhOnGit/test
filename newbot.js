@@ -7,6 +7,8 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker');
 const inquirer = require('inquirer');
+const express = require('express');
+const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
 
@@ -297,12 +299,12 @@ async function humanMoveAndClick(page, elementHandle) {
     const nx = startPos.x + (deltaX * i/steps);
     const ny = startPos.y + (deltaY * i/steps);
     await page.mouse.move(nx, ny);
-    await delayFunction(Math.floor(Math.random()*30+30));
+    await delayFunction(Math.floor(Math.random() * 30 + 30));
   }
   await page.mouse.down();
-  await delayFunction(Math.random()*100+50);
+  await delayFunction(Math.random() * 100 + 50);
   await page.mouse.up();
-  await delayFunction(Math.random()*100+50);
+  await delayFunction(Math.random() * 100 + 50);
 }
 
 // ----------------------------------------------------------
@@ -333,12 +335,13 @@ async function openWindow(
   let browser;
   try {
     // #4 random window size
-    const randomWidth = Math.floor(Math.random()*400+800);
-    const randomHeight = Math.floor(Math.random()*300+600);
+    const randomWidth = Math.floor(Math.random() * 400 + 800);
+    const randomHeight = Math.floor(Math.random() * 300 + 600);
 
     browser = await puppeteer.launch({
       // #3 Use new headless mode
       headless: headless ? 'new' : false,
+      executablePath: '/usr/bin/chromium-browser',
       // random window size
       args: [
         `--window-size=${randomWidth},${randomHeight}`,
@@ -417,9 +420,9 @@ async function openWindow(
 async function humanizedType(page, selector, text) {
   const input = await page.$(selector);
   if (!input) return;
-  for (let i=0; i<text.length; i++) {
+  for (let i = 0; i < text.length; i++) {
     await input.type(text.charAt(i));
-    await delayFunction(Math.floor(Math.random()*50+50));
+    await delayFunction(Math.floor(Math.random() * 50 + 50));
   }
 }
 
@@ -461,7 +464,7 @@ expressApp.use(bodyParser.json());
 expressApp.use(bodyParser.urlencoded({ extended: true }));
 
 expressApp.get('/', (req, res) => {
-  res.send(`<h1>Stealth Worker Running</h1><p>POST /start-bot, GET /stats</p>`);
+  res.send('<h1>Stealth Worker Running</h1><p>POST /start-bot, GET /stats</p>');
 });
 
 expressApp.post('/start-bot', async (req, res) => {
@@ -479,33 +482,33 @@ expressApp.post('/start-bot', async (req, res) => {
       videoPlaySeconds = 60
     } = req.body;
 
-    // reset stats each run if you want
-    globalStats.activeWindows = 0;
-    globalStats.totalViews = 0;
-    globalStats.totalRefreshes = 0;
-    // globalStats.totalWatchTime = 0; // if you track watch time
+    // reset stats each run if you want  
+    globalStats.activeWindows = 0;  
+    globalStats.totalViews = 0;  
+    globalStats.totalRefreshes = 0;  
 
-    const proxyFilePath = path.join(__dirname, 'proxies.txt');
-    const userAgentFilePath = path.join(__dirname, 'useragent.txt');
-    const proxies = readProxiesFromFile(proxyFilePath);
-    const userAgents = readUserAgentsFromFile(userAgentFilePath);
+    const proxyFilePath = path.join(__dirname, 'proxies.txt');  
+    const userAgentFilePath = path.join(__dirname, 'useragent.txt');  
+    const proxies = readProxiesFromFile(proxyFilePath);  
+    const userAgents = readUserAgentsFromFile(userAgentFilePath);  
 
-    await startDynamicAutomation(
-      query,
-      channelName,
-      applyCookies,
-      likeVideo,
-      subscribeChannel,
-      parseInt(totalWindows),
-      parseInt(maxConcurrent),
-      proxies,
-      userAgents,
-      filter,
-      (headless === true || headless === 'true'),
-      parseInt(videoPlaySeconds)
-    );
+    await startDynamicAutomation(  
+      query,  
+      channelName,  
+      applyCookies,  
+      likeVideo,  
+      subscribeChannel,  
+      parseInt(totalWindows),  
+      parseInt(maxConcurrent),  
+      proxies,  
+      userAgents,  
+      filter,  
+      (headless === true || headless === 'true'),  
+      parseInt(videoPlaySeconds)  
+    );  
 
     res.json({ success: true, message: 'Bot started with new stealth changes.' });
+
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
